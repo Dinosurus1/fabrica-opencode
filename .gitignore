@@ -1,0 +1,48 @@
+# Secretos y credenciales
+secrets/
+service.json
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+context7-token
+
+# Configuración local (rutas y credenciales). La plantilla es opencode.example.json
+opencode.json
+opencode.jsonc
+
+# Configuración local de la memoria (puede llevar DSN)
+plugins/opencode-memory/config.json
+plugins/opencode-memory/config.local.json
+
+# Copias locales / terceros / archivos históricos
+plugins/opencode-memory/
+backups/
+agents-archive/
+plugins-archive/
+*.bak
+*.bak.*
+*.orig
+*.rej
+
+# Dependencias y cachés
+node_modules/
+.npm/
+.pnpm-store/
+.cache/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Packs de Semgrep: licencia Semgrep Rules v1.0, se descargan aparte
+plugins/factory/rules/packs/
+
+# Logs y temporales
+*.log
+logs/
+tmp/
+*.tmp
+.DS_Store

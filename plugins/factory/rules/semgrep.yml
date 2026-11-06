@@ -1,0 +1,39 @@
+rules:
+  - id: factory.javascript.eval
+    languages: [javascript, typescript]
+    message: "Uso de eval(); riesgo de ejecución arbitraria."
+    severity: ERROR
+    pattern: eval(...)
+
+  - id: factory.javascript.child-process-exec
+    languages: [javascript, typescript]
+    message: "exec() de child_process; revisa si la entrada es dinámica."
+    severity: WARNING
+    patterns:
+      - pattern: child_process.exec(...)
+
+  - id: factory.python.eval
+    languages: [python]
+    message: "Uso de eval(); riesgo de ejecución arbitraria."
+    severity: ERROR
+    pattern: eval(...)
+
+  - id: factory.php.exec
+    languages: [php]
+    message: "exec()/system() con posible entrada dinámica."
+    severity: ERROR
+    pattern-either:
+      - pattern: exec(...)
+      - pattern: system(...)
+
+  - id: factory.java.runtime-exec
+    languages: [java]
+    message: "Runtime.exec(); revisa la entrada."
+    severity: WARNING
+    pattern: Runtime.getRuntime().exec(...)
+
+  - id: factory.ruby.eval
+    languages: [ruby]
+    message: "eval en Ruby."
+    severity: ERROR
+    pattern: eval(...)

@@ -1,0 +1,19 @@
+{
+  "name": "opencode-factory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fábrica de software genérica para OpenCode: perfil de proyecto, tareas, checks y seguridad",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.2.5",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/pg": "^8.15.6",
+    "typescript": "^5.9.3"
+  }
+}
