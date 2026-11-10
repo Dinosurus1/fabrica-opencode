@@ -11,6 +11,8 @@ Fábrica de software genérica para OpenCode V2. Instalación global en `~/.conf
 | `code-reviewer` | subagent | `opencode-go/claude-haiku-5-5` | Diseño, mantenibilidad, errores y convenciones. |
 | `qa-engineer` | subagent | `opencode-go/minimax-m3` | QA adversarial, tests de borde y evidencia por criterio. |
 | `helper` | subagent | `opencode-go/glm-5.3-flash` | Segunda opinión, documentación con citas e ideas de tests. |
+| `plan-reviewer` | subagent | `opencode-go/claude-haiku-5-5` | Revisión del plan por fases; solo lectura. |
+| `implementer` | subagent | `opencode-go/glm-5.3-flash` | Tarea pequeña y aislada en su worktree; sin shell ni commit. |
 
 | Tool | Qué hace |
 |---|---|
@@ -23,6 +25,12 @@ Fábrica de software genérica para OpenCode V2. Instalación global en `~/.conf
 | `security_scan` | semgrep/gitleaks/osv-scanner/trivy en modo `offline` (default) u `online`; reporta red y ausentes. |
 | `review_submit` | Guarda el veredicto del revisor y el uso/costo de su sesión en `review_runs`. |
 | `task_close` | Cierra una tarea solo con gates, revisiones, evidencia y memoria; guarda el informe con tokens y costo por modelo. |
+| `plan_create` / `plan_update` / `plan_status` | Plan por fases, tareas, dependencias, olas, deuda residual y waiver. |
+| `plan_validate` / `plan_review` | Validación determinista y revisión por severidad; `exhausted` pide decisión humana. |
+| `subtask_run` | Worktree en `~/.local/share/opencode/worktrees/<proyecto>/` + rama + sesión `implementer`. |
+| `review_run` | Lanza code/security/qa con modelos de familia distinta al autor y exige `review_submit`. |
+| `subtask_integrate` | Integra en `factory/integration/<proyecto>` con `--no-ff`; aborta conflictos. |
+| `phase_close` / `plan_resume` | Cierre de fase con gate, revisiones, memoria e informe; reanudación de sesiones/worktrees. |
 | `git_branch` | Crea o reutiliza una rama de tarea; rechaza ramas protegidas. |
 | `git_commit` | Stagea y commitea solo en rama no protegida; único camino permitido. |
 | `quality_policy_set` | Cambia la política de compuertas; exige `confirmed=true`. |
@@ -35,14 +43,23 @@ Las tools de memoria (`memory_search`, `memory_save`, `memory_forget`, `memory_c
 Los procedimientos largos viven en `~/.config/opencode/skills/` y se cargan bajo demanda:
 
 - `factory-onboarding`
+- `factory-intake`
+- `factory-task-triage`
 - `factory-task-loop`
 - `factory-quality-gates`
 - `factory-review-loop`
 - `factory-security-review`
 - `factory-git-safety`
+- `factory-phase-orchestration`
 - `factory-closure-report`
 
 El prompt de `factory` solo indica cuándo cargar cada una. Se pueden editar sin tocar el agente.
+
+Las 19 skills de `anthropics/skills` que se probaron **no se versionan** en este
+repositorio: quedan en `~/.local/share/opencode/skills-local/anthropic/`. Las de
+documentos (`docx`, `pdf`, `pptx`, `xlsx`) son source-available y no se
+redistribuyen; `doc-coauthoring` no trae licencia. El detalle y las licencias
+están en `~/.config/opencode/docs/skills-import.md`.
 
 ## Uso
 
@@ -56,6 +73,22 @@ El prompt de `factory` solo indica cuándo cargar cada una. Se pueden editar sin
 3. Para una tarea: crea tareas pequeñas, trabaja en rama `factory/<slug>`, implementa, ejecuta `run_gates`, corrige los bloqueantes, pasa `@qa-engineer` + `@code-reviewer` + `@security-reviewer` (si aplica); **cada revisor llama a `review_submit`**, commitea con `git_commit`, guarda memoria y cierra con `task_close`.
 4. Para cambiar de agente en la TUI, usa el selector de agentes; `factory` solo es el default de sesiones nuevas.
 5. Si algo falla tras una actualización, llama a `factory_doctor` antes de tocar la base o el plugin.
+
+### Modo por fases
+
+Para un proyecto existente con un documento de fases:
+
+1. `factory-intake` (skill): baseline, riesgos de seguridad y diff de fases propuesto.
+2. `plan_create` y `plan_review` (2 rondas normales; tercera con `confirmed=true` tras `exhausted`); registra hallazgos aceptados o refutados en `plan_update`. Un `CRÍTICO` no se refuta ni se waivea: exige una ronda posterior aprobada sin él.
+3. `plan_validate`; `CRÍTICO`/`ALTO` bloquean, `MEDIO`/`BAJO` son deuda. Aprueba con `plan_update({ status: "approved", confirmed: true })` o decide `approve_with_waiver`/`fix_and_revalidate`/`cancel` si la revisión está `exhausted`.
+4. `plan_status` para ver la ola; `subtask_run` ejecuta tareas `implementer` en paralelo en worktrees.
+5. `run_gates({ worktree })` y `review_run`; cada revisor llama a `review_submit`.
+6. `subtask_integrate` en `factory/integration/<proyecto>`.
+7. `run_gates` sobre la integración y `phase_close` con `memory_id`, `residual_risks` y `confirmed` en autonomía `supervised`.
+8. `plan_resume` tras una interrupción; `factory_doctor` audita worktrees huérfanos y tareas colgadas.
+
+La guía completa, el esquema y la desinstalación están en
+`~/.config/opencode/docs/orchestration.md`.
 
 ## Compuertas
 
@@ -128,10 +161,18 @@ locales configurados por ese plugin). Solo añade:
 - `tasks`: tareas por `project_id` (incluye `closure_report` y `closed_at`).
 - `gate_runs`: cada ejecución de compuertas por tarea e iteración.
 - `review_runs`: veredictos estructurados de revisores, sesión, tokens y costo.
+- `plans`: plan por fases, autonomía, concurrencia, documentos y estado de revisión/validación.
+- `plan_tasks`: tareas del plan, fase, dependencias, `files_owned`, worktree, rama y estado.
+- `plan_reviews` / `plan_validations`: rondas del plan-reviewer e historial determinista.
+- `subtask_runs`: cada intento de implementer con sesión, worktree, tokens y costo.
+- `phase_closures`: cierre por fase con gate, revisiones, informe y uso.
+- `tasks.author_model`: modelo autor para elegir revisores de otra familia.
 - `factory_meta`: versión de esquema.
 
 No modifica `memories` ni `capture_state`. Migraciones idempotentes:
-`plugins/factory/migrations/001_factory.sql`, `002_quality_gates.sql` y `003_usage.sql`.
+`plugins/factory/migrations/001_factory.sql`, `002_quality_gates.sql`,
+`003_usage.sql`, `004_orchestration.sql` y `005_review_severity.sql`
+(`schema_version=5`).
 
 Se puede cambiar la base con `FACTORY_DATABASE_URL` o
 `OPENCODE_MEMORY_DATABASE_URL`; nunca se registra la URL completa.
@@ -192,6 +233,12 @@ barato en input, pero con retención de 30 días frente a 0 de GLM y peor
 cobertura. En code/QA, Claude y MiniMax detectaron todos los criterios
 sembrados; se mantienen por su especialización.
 
+En el modo por fases, `tools/factory/routing.ts` aplica la regla de familia:
+si el autor es GLM, seguridad usa DeepSeek; si el autor es Claude, código usa
+DeepSeek; QA usa MiniMax o GPT-6 Luna para tareas simples. `subtask_run` puede
+fijar el modelo del implementer por tarea. Kimi K2.7 queda fuera del ruteo
+normal y solo se usa como escalado manual para bugs o arquitectura compleja.
+
 ## Desinstalar
 
 ```bash
@@ -200,27 +247,37 @@ cd ~/.config/opencode
 # 1. Restaura tu opencode.json/AGENTS.md desde tu backup local si lo tienes.
 #    Este repo no versiona backups ni tu configuración local.
 
-# 2. Borrar agentes, plugin, tools y skills
+# 2. Borrar agentes, plugin, tools, docs y skills
 rm -f agents/factory.md agents/security-reviewer.md agents/code-reviewer.md \
-      agents/qa-engineer.md agents/helper.md
-rm -rf plugins/factory tools/factory
-rm -rf skills/factory-onboarding skills/factory-task-loop \
+      agents/qa-engineer.md agents/helper.md agents/researcher.md \
+      agents/implementer.md agents/plan-reviewer.md
+rm -rf plugins/factory tools/factory docs/orchestration.md
+rm -rf skills/factory-onboarding skills/factory-intake \
+       skills/factory-task-triage skills/factory-task-loop \
        skills/factory-quality-gates skills/factory-review-loop \
        skills/factory-security-review skills/factory-git-safety \
-       skills/factory-closure-report
+       skills/factory-phase-orchestration skills/factory-closure-report
 
 # 3. Opcional: borrar las tablas/columnas de la fábrica (conserva la memoria)
+#    Si quieres conservar los planes, revierte 005 con el SQL completo de
+#    docs/orchestration.md §8.2 (incluye constraints y columnas).
+psql -h 127.0.0.1 -p 5433 -U opencode -d opencode_memory \
+  -c 'DROP TABLE IF EXISTS phase_closures; DROP TABLE IF EXISTS subtask_runs; DROP TABLE IF EXISTS plan_validations; DROP TABLE IF EXISTS plan_reviews; DROP TABLE IF EXISTS plan_tasks; DROP TABLE IF EXISTS plans;'
 psql -h 127.0.0.1 -p 5433 -U opencode -d opencode_memory \
   -c 'DROP TABLE IF EXISTS review_runs; DROP TABLE IF EXISTS gate_runs; DROP TABLE IF EXISTS factory_meta;'
 psql -h 127.0.0.1 -p 5433 -U opencode -d opencode_memory \
-  -c 'ALTER TABLE tasks DROP COLUMN IF EXISTS closure_report, DROP COLUMN IF EXISTS closed_at;'
+  -c 'ALTER TABLE tasks DROP COLUMN IF EXISTS closure_report, DROP COLUMN IF EXISTS closed_at, DROP COLUMN IF EXISTS author_model;'
 psql -h 127.0.0.1 -p 5433 -U opencode -d opencode_memory \
-  -c 'ALTER TABLE factory_projects DROP COLUMN IF EXISTS quality, DROP COLUMN IF EXISTS baseline, DROP COLUMN IF EXISTS baseline_at;'
+  -c 'ALTER TABLE factory_projects DROP COLUMN IF EXISTS quality, DROP COLUMN IF EXISTS baseline, DROP COLUMN IF EXISTS baseline_at, DROP COLUMN IF EXISTS autonomy, DROP COLUMN IF EXISTS max_concurrency;'
 psql -h 127.0.0.1 -p 5433 -U opencode -d opencode_memory \
   -c 'DROP TABLE IF EXISTS tasks; DROP TABLE IF EXISTS factory_projects;'
 ```
 
-Después, `/reload` o reinicia OpenCode para que desaparezcan del catálogo.
+Los worktrees y ramas de tareas no se borran solos: viven en
+`~/.local/share/opencode/worktrees/<proyecto>/` y se limpian a mano después de
+integrar. Después, `/reload` o reinicia OpenCode para que desaparezcan del
+catálogo. La guía con backup, orden de restauración y reversión de las
+migraciones 005 y 004 está en `docs/orchestration.md` §8.
 
 ## Notas de diseño
 

@@ -16,6 +16,7 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { FactoryDb, FactoryProfile, ProjectRef } from "./db.js";
 import { runCommand, shellQuote, tail } from "./exec.js";
+import { slugify } from "./paths.js";
 import { fail, looksLikeSecret, ok, type ToolDef } from "./types.js";
 
 export interface GitToolsDeps {
@@ -34,16 +35,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function inside(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
-}
-
-function slugify(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 50) || "task";
 }
 
 export function getProtectedBranches(profile: FactoryProfile | null): string[] {

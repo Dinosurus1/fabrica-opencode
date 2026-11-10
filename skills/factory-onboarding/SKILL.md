@@ -27,6 +27,11 @@ Objetivo: dejar un perfil exacto y verificado antes de tocar código.
 7. Ejecuta `run_gates({ mode: "baseline" })`. Guarda la línea base en el perfil y revisa qué compuertas quedaron `skipped` o `error`; explícalo antes de empezar a codificar. La deuda previa no bloquea tareas nuevas.
 8. No guardes secretos. Usa variables de entorno.
 
+Si el proyecto llega con un documento de fases o un encargo grande, no empieces
+a implementar: después del baseline, carga `factory-intake` para mapear el
+alcance, la seguridad y el diff de fases. El onboarding solo deja el repo
+listo; el plan se aprueba aparte.
+
 ## Notas por stack
 
 - **Node/TS**: respeta el package manager del lockfile. `lint`/`typecheck`/`test` deben ser scripts reales; si usas `npx`, verifica que el binario exista en el proyecto.

@@ -578,6 +578,19 @@ export function createFactoryDb(query: QueryFn, migrationSql: string | string[])
     return result.rows.map(mapTask);
   }
 
+  async function setTaskAuthorModel(
+    projectId: string,
+    id: string,
+    authorModel: string,
+  ): Promise<void> {
+    await init();
+    await query(
+      `UPDATE tasks SET author_model = $3, updated_at = now()
+       WHERE project_id = $1 AND id = $2`,
+      [projectId, id, authorModel],
+    );
+  }
+
   async function setQuality(projectId: string, quality: Record<string, unknown>): Promise<FactoryProfile | null> {
     await init();
     const result = await query<ProfileRow>(
@@ -732,6 +745,22 @@ export function createFactoryDb(query: QueryFn, migrationSql: string | string[])
     return result.rows.map(mapReviewRun);
   }
 
+  async function getReviewsForGate(taskId: string, gateRunId: string, iteration: number): Promise<ReviewRun[]> {
+    await init();
+    const result = await query<ReviewRunRow>(
+      `SELECT DISTINCT ON (role)
+              id, project_id, task_id, role, model, verdict, findings,
+              open_blocking, summary, gate_run_id, iteration, session_id,
+              tokens_input, tokens_output, tokens_reasoning, tokens_cache_read,
+              tokens_cache_write, cost_usd, cost_source, cost_basis, created_at
+       FROM review_runs
+       WHERE task_id = $1 AND gate_run_id = $2 AND iteration = $3
+       ORDER BY role, created_at DESC`,
+      [taskId, gateRunId, iteration],
+    );
+    return result.rows.map(mapReviewRun);
+  }
+
   async function getMemory(id: string): Promise<MemoryRecord | null> {
     await init();
     const result = await query<MemoryRow>(
@@ -757,6 +786,7 @@ export function createFactoryDb(query: QueryFn, migrationSql: string | string[])
     upsertProfile,
     setQuality,
     setBaseline,
+    setTaskAuthorModel,
     createTask,
     getTask,
     updateTask,
@@ -767,6 +797,7 @@ export function createFactoryDb(query: QueryFn, migrationSql: string | string[])
     getLatestGateRun,
     createReviewRun,
     getLatestReviews,
+    getReviewsForGate,
     getMemory,
     getMeta,
     health,

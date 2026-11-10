@@ -14,6 +14,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { FactoryDb, FactoryProfile, ProjectRef } from "./db.js";
+import type { PlanStore } from "./plan-db.js";
 import { extractFindings, type Finding } from "./checks.js";
 import { evaluateCoverage, getCoverageConfig, parseCoverageOutput, parseCoverageReport } from "./coverage.js";
 import { runCommand, shellQuote, tail, type CommandResult } from "./exec.js";
@@ -23,6 +24,7 @@ import { fail, looksLikeSecret, ok, type ToolDef } from "./types.js";
 
 export interface GatesToolsDeps {
   db: FactoryDb;
+  planStore?: PlanStore;
   resolveProject: (sessionID: string) => Promise<ProjectRef>;
   permission: { assert: (input: Record<string, unknown>) => Promise<void> };
 }
@@ -862,6 +864,10 @@ export function createGatesTools(deps: GatesToolsDeps): ToolDef[] {
           },
           include_slow: { type: "boolean", default: false },
           base: { type: "string", description: "Rama base para diff; default del perfil o main." },
+          worktree: {
+            type: "string",
+            description: "Worktree registrado del plan donde ejecutar las compuertas; si se omite, usa el proyecto de la sesión.",
+          },
         },
         additionalProperties: false,
       },
@@ -869,6 +875,22 @@ export function createGatesTools(deps: GatesToolsDeps): ToolDef[] {
         const project = await deps.resolveProject(String(context.sessionID));
         const profile = await deps.db.getProfile(project.projectId);
         if (!profile) return fail("No hay perfil del proyecto. Ejecuta onboarding y project_profile_set primero.");
+
+        let runProject = project;
+        const worktree = typeof input.worktree === "string" ? input.worktree.trim() : "";
+        if (worktree) {
+          if (!isAbsolute(worktree) || !existsSync(worktree)) {
+            return fail("El worktree indicado no existe o no es una ruta absoluta.");
+          }
+          const insideProject = inside(project.directory, worktree);
+          const known =
+            insideProject ||
+            (deps.planStore
+              ? (await deps.planStore.listPlanTasksByWorktree(project.projectId)).some((task) => task.worktree === worktree)
+              : false);
+          if (!known) return fail("El worktree no pertenece a este proyecto ni está registrado en un plan.");
+          runProject = { ...project, directory: worktree };
+        }
 
         const gateContext: GateContext = {
           sessionID: String(context.sessionID),
@@ -909,7 +931,7 @@ export function createGatesTools(deps: GatesToolsDeps): ToolDef[] {
         const results: GateResult[] = [];
 
         for (const gate of requested) {
-          let result = await runGate(deps, gateContext, project, profile, gate, input.include_slow === true);
+          let result = await runGate(deps, gateContext, runProject, profile, gate, input.include_slow === true);
           result = applyPolicy(result, policy);
           if (mode === "check") {
             result = applyBaseline(result, isPlainObject(baselineGates[gate]) ? (baselineGates[gate] as Record<string, unknown>) : null);
@@ -925,8 +947,8 @@ export function createGatesTools(deps: GatesToolsDeps): ToolDef[] {
         const status = blockingFailures.length > 0 ? "fail" : blockingSkipped.length > 0 ? "incomplete" : "pass";
         const summary = `${results.filter((result) => result.status === "pass").length} pass, ${results.filter((result) => result.status === "fail").length} fail, ${results.filter((result) => result.status === "skipped").length} skipped, ${results.filter((result) => result.status === "error").length} error`;
 
-        const branch = await getCurrentBranch(project.directory).catch(() => null);
-        const headResult = await runCommand("git rev-parse HEAD", project.directory, 10_000).catch(() => null);
+        const branch = await getCurrentBranch(runProject.directory).catch(() => null);
+        const headResult = await runCommand("git rev-parse HEAD", runProject.directory, 10_000).catch(() => null);
         const commit = headResult && headResult.exitCode === 0 ? headResult.stdout.trim() : null;
 
         if (mode === "baseline") {
@@ -994,6 +1016,7 @@ export function createGatesTools(deps: GatesToolsDeps): ToolDef[] {
           task_id: taskId,
           iteration,
           gate_run_id: gateRun.id,
+          worktree: worktree || null,
           summary,
           blocking_failures: blockingFailures.map((result) => ({ gate: result.gate, status: result.status })),
           skipped_blocking: blockingSkipped.map((result) => ({ gate: result.gate, reason: result.skipped_reason })),

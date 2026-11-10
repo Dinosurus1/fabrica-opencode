@@ -21,6 +21,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createFactoryDb, type QueryFn } from "../../tools/factory/db.js";
 import { createFactoryTools } from "../../tools/factory/index.js";
+import { createPlanStore } from "../../tools/factory/plan-db.js";
 import { redact } from "../../tools/factory/exec.js";
 import type { ModelPrice, SessionUsageSnapshot } from "../../tools/factory/usage.js";
 
@@ -69,6 +70,7 @@ export default Plugin.define({
     const query = ((sql: string, params?: readonly unknown[]) =>
       pool.query(sql, params as unknown[] | undefined)) as unknown as QueryFn;
     const db = createFactoryDb(query, migrations);
+    const planStore = createPlanStore(query, db.init);
 
     const log = (...args: unknown[]) => console.log("[opencode-factory]", ...args);
     void db
@@ -202,7 +204,9 @@ export default Plugin.define({
     await ctx.tool.transform((editor) => {
       for (const tool of createFactoryTools({
         db,
+        planStore,
         resolveProject,
+        runtime: ctx,
         permission: {
           assert: (input) => ctx.permission.assert(input as never),
         },

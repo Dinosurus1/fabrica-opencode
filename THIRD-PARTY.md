@@ -47,6 +47,37 @@ https://semgrep.dev/legal/rules-license
 No se redistribuyen para evitar dudas sobre esa licencia. La ruta
 `plugins/factory/rules/packs/` está en `.gitignore`.
 
+## Skills de Anthropic (locales, no redistribuidas)
+
+No se versionan en este repositorio. Se importaron desde `anthropics/skills`
+(commit `2c5958ecac7cee2b583967a2c4981d0f4a75c579`) y quedan solo en disco.
+
+| Skill | Licencia | Redistribución |
+|---|---|---|
+| `academy-guide` | Apache-2.0 (`LICENSE.txt`) | Sí, con atribución. |
+| `algorithmic-art` | Apache-2.0 (`LICENSE.txt`) | Sí, con atribución. |
+| `brand-guidelines` | Apache-2.0 (`LICENSE.txt`) | Sí, con atribución. |
+| `canvas-design` | Apache-2.0 (`LICENSE.txt`) | Sí, con atribución. |
+| `claude-api` | Apache-2.0 (`LICENSE.txt`) | Sí, con atribución. |
+| `discernment-nudge` | Apache-2.0 (`LICENSE.txt`) | Sí, con atribución. |
+| `doc-coauthoring` | **Sin `LICENSE.txt`** | **No** sin permiso explícito. |
+| `docx` | Source-available; el `LICENSE.txt` del zip reproduce Apache-2.0, pero el titular la declara no redistribuible. | **No**. Solo local. |
+| `frontend-design` | Apache-2.0 (`LICENSE.txt`, sin apéndice) | Sí, con atribución. |
+| `internal-comms` | Apache-2.0 (`LICENSE.txt`) | Sí, con atribución. |
+| `mcp-builder` | Apache-2.0 (`LICENSE.txt`) | Sí, con atribución. |
+| `pdf` | Source-available; mismo caso que `docx`. | **No**. Solo local. |
+| `pptx` | Source-available; mismo caso que `docx`. | **No**. Solo local. |
+| `skill-creator` | Apache-2.0 (`LICENSE.txt`) | Sí, con atribución. |
+| `slack-gif-creator` | Apache-2.0 (`LICENSE.txt`) | Sí, con atribución. |
+| `theme-factory` | Apache-2.0 (`LICENSE.txt`) | Sí, con atribución. |
+| `web-artifacts-builder` | Apache-2.0 (`LICENSE.txt`) | Sí, con atribución. |
+| `webapp-testing` | Apache-2.0 (`LICENSE.txt`) | Sí, con atribución. |
+| `xlsx` | Source-available; mismo caso que `docx`. | **No**. Solo local. |
+
+El detalle operativo y el peso en tokens están en `docs/skills-import.md`. Si
+alguna vez se versiona una skill Apache-2.0, hay que conservar su `LICENSE.txt`
+y actualizar esta tabla.
+
 ## opencode-memory
 
 No se incluye. La copia local no declara autor, licencia ni atribución

@@ -40,6 +40,28 @@ venv/
 # Packs de Semgrep: licencia Semgrep Rules v1.0, se descargan aparte
 plugins/factory/rules/packs/
 
+# Skills de Anthropic: locales, no redistribuidas (ver docs/skills-import.md)
+docs/skills-import/
+skills/academy-guide/
+skills/algorithmic-art/
+skills/anthropic-docx/
+skills/anthropic-pdf/
+skills/anthropic-pptx/
+skills/anthropic-skill-creator/
+skills/anthropic-xlsx/
+skills/brand-guidelines/
+skills/canvas-design/
+skills/claude-api/
+skills/discernment-nudge/
+skills/doc-coauthoring/
+skills/frontend-design/
+skills/internal-comms/
+skills/mcp-builder/
+skills/slack-gif-creator/
+skills/theme-factory/
+skills/web-artifacts-builder/
+skills/webapp-testing/
+
 # Logs y temporales
 *.log
 logs/

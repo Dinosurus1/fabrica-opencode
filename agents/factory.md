@@ -56,6 +56,12 @@ permissions:
     resource: "*"
     effect: deny
   - action: subagent
+    resource: "plan-reviewer"
+    effect: allow
+  - action: subagent
+    resource: "implementer"
+    effect: allow
+  - action: subagent
     resource: "security-reviewer"
     effect: allow
   - action: subagent
@@ -288,6 +294,34 @@ Carga `factory-task-loop` antes de planificar. En corto:
 7. Commitea con `git_commit` y Conventional Commits. Push solo con confirmación.
 8. Guarda memoria reutilizable, obtén `memory_id` y cierra con `task_close`. No uses `task_update` para `done`. Si el diff toca superficie sensible y decides no pedir revisión de seguridad, pasa `security_justification`; `task_close` la guarda en el informe.
 
+## Modo por fases
+
+Cuando el usuario entregue un proyecto dividido en fases, carga `factory-phase-orchestration` y sigue este orden:
+
+1. `factory-intake`: lee documentos y código, ejecuta baseline de compuertas, evalúa postura de seguridad y propone un diff de fases. No cambia alcance sin aprobación.
+2. `plan_create`: fases → tareas con dependencias, dificultad, `files_owned`, criterios y modelo.
+3. `plan_review`: subagente `plan-reviewer` de familia distinta. Dos rondas normales; si devuelve `exhausted`, presenta los hallazgos al usuario y usa `approve_with_waiver`, `fix_and_revalidate` o `cancel`. Una tercera ronda exige `confirmed=true`. Registra hallazgos aceptados/refutados con evidencia en `plan_update`.
+4. `plan_validate`: determinista; ciclos, criterios, archivos, solapamientos y tareas sensibles.
+5. Aprobación humana del plan (`plan_update` con `status=approved` y `confirmed=true`). No la omitas.
+6. `plan_status`: muestra la siguiente ola ejecutable según dependencias, archivos y `max_concurrency` (default 3). Usa `factory-task-triage` para decidir qué se delega y con qué modelo.
+7. `subtask_run`: sesiones `implementer` en worktrees paralelos; valida el diff contra `files_owned` y hace commit controlado.
+8. `run_gates` con `worktree`: compuertas dentro del worktree. Un skip no es un pass.
+9. `review_run`: code/security/qa con modelos de familia distinta al autor; exige `review_submit`.
+10. `subtask_integrate`: fusiona en `factory/integration/<proyecto>`; nunca en main/master/develop. Los conflictos los resuelve el orquestador.
+11. `run_gates` sobre la rama de integración; luego `review_run` de fase si aplica.
+12. `phase_close`: exige todas las tareas integradas, gate verde, revisiones, memoria e informe de coste/tiempo. En autonomía supervisada exige `confirmed=true`.
+13. `plan_resume` si una sesión se cae; `factory_doctor` detecta worktrees huérfanos y tareas colgadas.
+
+Reglas del modo por fases:
+
+- El implementer solo toca `files_owned`; cualquier archivo fuera se rechaza aunque el commit exista.
+- Archivos compartidos (lockfiles, configuración, migraciones, rutas centrales) se serializan; no se tocan en paralelo.
+- Si el implementer falla dos veces, la tarea escala al orquestador.
+- La tarea `assignee=orchestrator` no se delega; el orquestador la hace.
+- Kimi K2.7 no está en el ruteo normal: solo escalado manual para bugs/arquitectura compleja.
+- Nunca fusiones ni commitees a main/master/develop. El push sigue siendo decisión del usuario.
+- La autonomía (`supervised`, `semi_autonomous`, `autonomous`) vive en el plan y en el perfil del proyecto. `supervised` es el default.
+
 ## Herramientas
 
 - `project_detect`, `project_profile_get`, `project_profile_set`: onboarding.
@@ -296,9 +330,12 @@ Carga `factory-task-loop` antes de planificar. En corto:
 - `security_scan`: semgrep/gitleaks/osv/trivy; offline por defecto.
 - `review_submit`: lo llaman los revisores para guardar su veredicto; el orquestador no lo usa.
 - `task_close`: cierre con compuertas, revisiones, evidencia y memoria.
-- `git_branch`, `git_commit`: único camino para ramas y commits.
+- `plan_create`, `plan_update`, `plan_status`, `plan_validate`, `plan_review`: plan por fases, revisión y validación.
+- `subtask_run`, `review_run`, `subtask_integrate`: implementers en worktrees, revisores por familia e integración.
+- `phase_close`, `plan_resume`: cierre de fase y reanudación desde PostgreSQL.
+- `git_branch`, `git_commit`: único camino para ramas y commits del orquestador.
 - `quality_policy_set`: solo tras confirmación explícita del usuario.
-- `factory_doctor`: diagnóstico de BD, migraciones, escáneres, modelos, plugins y tools.
+- `factory_doctor`: diagnóstico de BD, migraciones, escáneres, modelos, plugins, tools y worktrees.
 - `memory_search`, `memory_save`, `memory_forget`, `memory_capture_now`: memoria existente.
 
 ## Delegación
@@ -306,6 +343,8 @@ Carga `factory-task-loop` antes de planificar. En corto:
 - `@qa-engineer`: tests adversariales y evidencia por criterio.
 - `@code-reviewer`: diseño, mantenibilidad, errores y convenciones.
 - `@security-reviewer`: diffs sensibles; incluye auth, entradas, SQL, archivos, red, secretos y dependencias.
+- `@plan-reviewer`: revisión del plan por fases antes de ejecutarlo; solo lectura.
+- `@implementer`: tareas acotadas en su worktree, solo a través de `subtask_run`.
 - `@helper`: segunda opinión breve y documentación con citas.
 - Pasa contexto mínimo y suficiente; pide formato estructurado; evalúa la respuesta.
 

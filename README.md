@@ -2,7 +2,9 @@
 
 Configuración global de **OpenCode V2** para convertir un repositorio en una
 fábrica de software: onboarding, tareas verificables, compuertas deterministas,
-revisores LLM, control de cierre y memoria persistente.
+revisores LLM, control de cierre y memoria persistente. Incluye un **modo por
+fases** para planificar proyectos existentes, repartir tareas en subagentes
+paralelos con worktrees y verificarlas antes de integrarlas.
 
 Licencia **MIT** (ver `LICENSE`). Copyright (c) 2026 Dinosurus.
 
@@ -10,14 +12,25 @@ Licencia **MIT** (ver `LICENSE`). Copyright (c) 2026 Dinosurus.
 
 La fábrica vive en `~/.config/opencode/` y se compone de:
 
-- `agents/`: orquestador (`factory`) y subagentes de revisión, ayuda e
-  investigación.
-- `skills/`: procedimientos de onboarding, tareas, compuertas, revisión,
-  seguridad, git y cierre.
+- `agents/`: orquestador (`factory`), subagentes de revisión, ayuda e
+  investigación, y los agentes del modo por fases (`implementer` y
+  `plan-reviewer`).
+- `skills/`: procedimientos de onboarding, ingesta, triaje, tareas, compuertas,
+  revisión, seguridad, git, orquestación por fases y cierre. Solo se versionan
+  las skills propias `factory-*`; las de `anthropics/skills` quedan en local y
+  no se redistribuyen (ver `docs/skills-import.md`).
 - `tools/factory/`: tools de perfil, tareas, checks, compuertas, seguridad, git,
-  revisiones, cierre y diagnóstico.
+  revisiones, plan, worktrees, fases, reanudación y diagnóstico.
 - `plugins/factory/`: registro de tools, migraciones SQL y reglas locales de
   Semgrep.
+- `docs/orchestration.md`: guía del modo por fases, esquema, coste y
+  desinstalación.
+- `docs/skills-import.md`: origen, licencias, conflictos y modo de carga de las
+  skills importadas.
+- `docs/validation-stage-d.md`: resultados de la validación de casos de borde,
+  paralelismo, fusión, `phase_close`, coste y bugs corregidos.
+- `docs/plan-review-rules.md`: hallazgos abiertos de los planes de 6 fases y
+  propuesta de aprobación por severidad y rondas agotadas.
 - `opencode.example.json`: plantilla de configuración sin claves ni rutas
   personales.
 
@@ -143,8 +156,12 @@ La fábrica reutiliza PostgreSQL/pgvector:
 - Si no, usa el DSN local de desarrollo
   `postgres://opencode@127.0.0.1:5433/opencode_memory` (sin contraseña).
 
-No modifica la tabla `memories` ni el esquema de `opencode-memory`; solo crea
-`factory_projects`, `tasks`, `gate_runs`, `review_runs` y `factory_meta`.
+No modifica la tabla `memories` ni el esquema de `opencode-memory`; crea
+`factory_projects`, `tasks`, `gate_runs`, `review_runs`, `plans`, `plan_tasks`,
+`plan_reviews`, `plan_validations`, `subtask_runs`, `phase_closures` y
+`factory_meta`. Las migraciones 004 y 005 son aditivas y dejan
+`schema_version=5`; la 005 añade `review_exhausted`, `residual_findings`,
+`approval_waiver` y las métricas por ronda del plan-reviewer.
 
 `factory_doctor` da `warn` si faltan `memories` o `capture_state`. Sin memoria,
 las compuertas y las revisiones funcionan, pero `task_close` no puede cerrar.
@@ -172,6 +189,47 @@ cierre.
 5. El push y el deploy no son automáticos. La fábrica commitea en local; el
    push lo decides tú.
 
+## Modo por fases
+
+Para proyectos existentes con un documento de fases, la fábrica puede planificar
+antes de tocar código y repartir el trabajo en subagentes paralelos. La guía
+completa está en `docs/orchestration.md`; este es el resumen:
+
+1. **Ingesta** (`factory-intake`): lee documentos y código, ejecuta baseline de
+   compuertas, evalúa la postura de seguridad y propone un diff de fases. No
+   cambia el alcance sin aprobación.
+2. **Plan** (`plan_create`): fases → tareas con dependencias, dificultad,
+   `files_owned`, criterios de aceptación y modelo.
+3. **Revisión y validación** (`plan_review`, `plan_validate`): un
+   `plan-reviewer` de familia distinta revisa el plan. Dos rondas normales;
+   `CRÍTICO`/`ALTO` bloquean, `MEDIO`/`BAJO` son deuda con `confirmed=true`.
+   Si se agota la revisión, `plan_review` devuelve `exhausted` con las opciones
+   `approve_with_waiver`, `fix_and_revalidate` o `cancel`; una tercera ronda
+   exige `confirmed=true`. La validación determinista comprueba ciclos,
+   archivos, solapamientos y tareas sensibles.
+4. **Aprobación humana**: `plan_update` con `status=approved` y
+   `confirmed=true`. No se omite.
+5. **Ejecución** (`subtask_run`): una sesión `implementer` y un `git worktree`
+   por tarea, en `~/.local/share/opencode/worktrees/<proyecto>/`. El
+   implementer solo edita `files_owned`; el diff se valida y el commit lo hace
+   la tool de forma controlada. Los subagentes nativos no heredan tools de
+   edición, así que la ejecución paralela real usa `subtask_run` con worktrees,
+   no el tool `subagent` directo.
+6. **Compuertas y revisión** (`run_gates` con `worktree`, `review_run`):
+   code/security/qa con modelos de familia distinta al autor.
+7. **Integración** (`subtask_integrate`): solo en
+   `factory/integration/<proyecto>`; nunca en `main`, `master` ni `develop`.
+8. **Cierre de fase** (`phase_close`): exige tareas integradas, gate verde en la
+   rama de integración, revisiones aprobadas, memoria e informe de coste/tiempo.
+   En autonomía `supervised` exige `confirmed=true`.
+9. **Reanudación** (`plan_resume`, `factory_doctor`): reconcilia sesiones y
+   worktrees, detecta huérfanos y tareas colgadas.
+
+Autonomía por defecto: `supervised`. La concurrencia por defecto es 3 y se
+configura por plan. El estado vive en PostgreSQL (migraciones 004 y 005), así
+que una sesión interrumpida no pierde el plan. Los worktrees viven fuera de
+`/tmp`, en `~/.local/share/opencode/worktrees/<proyecto>/`.
+
 ## Modelos por rol y cómo cambiarlos
 
 | Agente | Rol | Modelo por defecto |
@@ -182,6 +240,14 @@ cierre.
 | `qa-engineer` | QA adversarial y tests | `opencode-go/minimax-m3` |
 | `helper` | Segunda opinión y documentación | `opencode-go/glm-5.3-flash` |
 | `researcher` | Información cambiante fuera de docs | `opencode-go/deepseek-v4.1-flash` |
+| `plan-reviewer` | Revisión del plan por fases (solo lectura) | `opencode-go/claude-haiku-5-5` |
+| `implementer` | Tarea pequeña aislada en su worktree | `opencode-go/glm-5.3-flash` |
+
+En el modo por fases, `subtask_run` puede fijar otro modelo por tarea y
+`review_run`/`phase_close` eligen el revisor por familia: un revisor nunca usa
+la misma familia que el autor. El ruteo vive en `tools/factory/routing.ts`.
+Kimi K2.7 no está en el ruteo normal; solo se usa como escalado manual para bugs
+o arquitectura compleja.
 
 Para cambiar un modelo, edita `model:` en el frontmatter del agente:
 
@@ -199,7 +265,10 @@ verás un `warn` (no un error). Actualízala o acepta el aviso.
 
 Los modelos deben existir en tu configuración de OpenCode. Los revisores son de
 solo lectura y solo tienen permiso para `read` y `review_submit`; el orquestador
-tiene `review_submit` denegado.
+tiene `review_submit` denegado. En el modo por fases, `implementer` solo puede
+leer y editar dentro de su worktree: no tiene shell, no lanza subagentes y no
+puede commitear; `subtask_run` hace el commit controlado y rechaza cualquier
+archivo fuera de `files_owned`.
 
 ## Qué ejecuta y qué permisos usa
 
@@ -213,7 +282,14 @@ tiene `review_submit` denegado.
 | `git_commit` | `git add` y `git commit`. | Acción `git.commit`; solo rama no protegida; sin push. |
 | `review_submit` | Escritura en `review_runs`. | Solo revisores; el orquestador no puede. |
 | `task_close` | Lectura git, escritura en `tasks` y `closure_report`. | Sin push; exige gates, revisiones, memoria y evidencia. |
-| `factory_doctor` | `--version` de escáneres y consultas a PostgreSQL. | Sin escritura. |
+| `plan_create`, `plan_update`, `plan_status` | Plan por fases en PostgreSQL. | Sin shell; valida el grafo antes de insertar. |
+| `plan_validate`, `plan_review` | Validación determinista y revisión del plan por severidad. | `plan_review` lanza un subagente de solo lectura; `exhausted` pide decisión humana. |
+| `plan_update` | Aprueba con deuda o waiver, corrige/revalida o cancela. | `confirmed=true`; `CRÍTICO` no se puede waivear. |
+| `subtask_run` | Crea worktree en `~/.local/share/opencode/worktrees/<proyecto>/`, rama y sesión `implementer`. | `git.worktree`; valida el diff contra `files_owned`. |
+| `review_run` | Lanza revisores y exige `review_submit`. | Sesiones de solo lectura; modelos de otra familia. |
+| `subtask_integrate` | `git merge --no-ff` en la rama de integración. | Solo `factory/integration/<proyecto>`; aborta conflictos. |
+| `phase_close`, `plan_resume` | Cierre de fase y reconciliación de sesiones/worktrees. | `phase_close` exige gate, revisiones, memoria y `confirmed` en `supervised`. |
+| `factory_doctor` | `--version` de escáneres, consultas a PostgreSQL y worktrees. | Sin escritura. |
 | `memory_*` | PostgreSQL + Ollama, si `opencode-memory` está instalado. | Fuera de este repo. |
 
 Detalles:
@@ -289,9 +365,32 @@ es una factura. La fórmula está en `plugins/factory/README.md`.
   memoria. `factory_doctor` avisa (dos tablas y el plugin) y `task_close` no
   puede cerrar; las compuertas y revisiones sí funcionan. Instálalo aparte o
   adapta el cierre.
+- **Modo por fases validado en un proyecto sintético**, no en proyectos reales
+  grandes: dos tareas paralelas, gates, revisiones, integración y cierre de fase.
+  Los casos de edición fuera de `files_owned`, doble fallo del implementer,
+  ciclos de dependencias y sesión interrumpida están cubiertos por la validación
+  determinista y `plan_resume`, pero no sustituyen una prueba de campo.
+- **Plan reviewer con dos rondas normales.** Si no converge, `plan_review`
+  devuelve `exhausted` y el usuario decide (`approve_with_waiver`,
+  `fix_and_revalidate` o `cancel`); una tercera ronda exige `confirmed=true`.
+- **Worktrees en disco.** Cada tarea crea un `git worktree` en
+  `~/.local/share/opencode/worktrees/<proyecto>/`; si se interrumpe,
+  `plan_resume` y `factory_doctor` detectan worktrees huérfanos, ausentes o con
+  `.git` roto, pero la limpieza final es manual.
+- **Coste por fase estimado.** `phase_close` agrega tokens y coste de las
+  sesiones registradas; si el proveedor no reporta precio, la cifra es una
+  estimación de catálogo, no una factura.
 - **Probado en Linux** (CachyOS/Arch). No se ha validado en macOS ni Windows.
 - **El push no es automático.** La fábrica commitea en local; publicar es una
   decisión explícita.
+
+## Desinstalación
+
+La fábrica base y el modo por fases se desinstalan restaurando el backup previo
+y, solo si no necesitas los datos, revirtiendo las migraciones 005 y 004 en ese
+orden. Los pasos completos —incluido el SQL de reversión, las columnas nuevas y
+la limpieza de worktrees— están en `docs/orchestration.md` §8 y en
+`plugins/factory/README.md`.
 
 ## Seguridad y datos
 

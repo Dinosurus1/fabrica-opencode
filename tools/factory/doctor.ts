@@ -10,15 +10,18 @@
  * ni secretos. Los comandos `--version` son de solo lectura.
  */
 
-import { accessSync, constants, readdirSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, readdirSync, statSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FactoryDb, ProjectRef } from "./db.js";
-import { redact, runCommand, tail } from "./exec.js";
+import type { PlanStore } from "./plan-db.js";
+import { redact, runCommand, shellQuote, tail } from "./exec.js";
+import { worktreeRoot } from "./paths.js";
 import { ok, type ToolDef } from "./types.js";
 
 export interface DoctorDeps {
   db: FactoryDb;
+  planStore?: PlanStore;
   resolveProject: (sessionID: string) => Promise<ProjectRef>;
   diagnostics: {
     listAgents: () => Promise<unknown>;
@@ -30,6 +33,8 @@ export interface DoctorDeps {
 
 const EXPECTED_AGENTS: Record<string, string> = {
   factory: "opencode-go/deepseek-v4.1-flash",
+  "plan-reviewer": "opencode-go/claude-haiku-5-5",
+  implementer: "opencode-go/glm-5.3-flash",
   "security-reviewer": "opencode-go/glm-5.3-flash",
   "code-reviewer": "opencode-go/claude-haiku-5-5",
   "qa-engineer": "opencode-go/minimax-m3",
@@ -51,6 +56,16 @@ const EXPECTED_TOOLS = [
   "quality_policy_set",
   "review_submit",
   "task_close",
+  "plan_create",
+  "plan_update",
+  "plan_status",
+  "plan_validate",
+  "plan_review",
+  "subtask_run",
+  "review_run",
+  "subtask_integrate",
+  "phase_close",
+  "plan_resume",
   "factory_doctor",
 ];
 
@@ -124,7 +139,17 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
               add(`tabla:${table}`, "error", error instanceof Error ? error.message : String(error));
             }
           }
-          for (const table of ["gate_runs", "review_runs", "factory_meta"]) {
+          for (const table of [
+            "gate_runs",
+            "review_runs",
+            "factory_meta",
+            "plans",
+            "plan_tasks",
+            "plan_reviews",
+            "plan_validations",
+            "subtask_runs",
+            "phase_closures",
+          ]) {
             try {
               const present = await deps.db.tableExists(table);
               add(`tabla:${table}`, present ? "ok" : "error", present ? "existe" : "falta; aplica la migración pendiente");
@@ -135,7 +160,7 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
           try {
             const version = await deps.db.getMeta("schema_version");
             const numeric = Number(version);
-            add("migración:schema_version", numeric === 3 ? "ok" : "error", `schema_version=${String(version ?? "desconocida")}; esperado 3`);
+            add("migración:schema_version", numeric === 5 ? "ok" : "error", `schema_version=${String(version ?? "desconocida")}; esperado 5`);
           } catch (error) {
             add("migración:schema_version", "error", error instanceof Error ? error.message : String(error));
           }
@@ -144,9 +169,23 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
             ["factory_projects", "quality"],
             ["factory_projects", "baseline"],
             ["factory_projects", "baseline_at"],
+            ["factory_projects", "autonomy"],
+            ["factory_projects", "max_concurrency"],
             ["tasks", "acceptance_criteria"],
             ["tasks", "closure_report"],
             ["tasks", "closed_at"],
+            ["tasks", "author_model"],
+            ["plans", "review_round"],
+            ["plans", "review_exhausted"],
+            ["plans", "residual_findings"],
+            ["plans", "approval_waiver"],
+            ["plans", "validation"],
+            ["plan_tasks", "status"],
+            ["plan_tasks", "worktree"],
+            ["plan_reviews", "blocking_count"],
+            ["plan_reviews", "advisory_count"],
+            ["plan_reviews", "new_findings"],
+            ["plan_reviews", "resolved_findings"],
             ["review_runs", "session_id"],
             ["review_runs", "tokens_input"],
             ["review_runs", "tokens_output"],
@@ -162,6 +201,66 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
             } catch (error) {
               add(`columna:${table}.${column}`, "error", error instanceof Error ? error.message : String(error));
             }
+          }
+        }
+
+        if (deps.planStore) {
+          try {
+            const worktrees = await runCommand("git worktree list --porcelain", project.directory, 15_000);
+            const known = new Set(
+              worktrees.exitCode === 0
+                ? worktrees.stdout.split(/\r?\n/)
+                    .filter((line) => line.startsWith("worktree "))
+                    .map((line) => line.slice("worktree ".length).trim())
+                : [],
+            );
+            const registered = await deps.planStore.listPlanTasksByWorktree(project.projectId);
+            const registeredPaths = new Set(registered.map((task) => task.worktree).filter((path): path is string => Boolean(path)));
+            const localRoot = worktreeRoot(project.name);
+            const localDirs = existsSync(localRoot)
+              ? readdirSync(localRoot, { withFileTypes: true })
+                  .filter((entry) => entry.isDirectory())
+                  .map((entry) => join(localRoot, entry.name))
+              : [];
+            const orphan = [...new Set([
+              ...[...known].filter((path) => path !== project.directory && !registeredPaths.has(path)),
+              ...localDirs.filter((path) => !known.has(path) && !registeredPaths.has(path)),
+            ])];
+            const missing = registered.filter((task) => task.worktree && !existsSync(task.worktree));
+            const broken: typeof registered = [];
+            for (const task of registered) {
+              if (!task.worktree || !existsSync(task.worktree)) continue;
+              const valid = await runCommand(
+                `git -C ${shellQuote(task.worktree)} rev-parse --is-inside-work-tree`,
+                project.directory,
+                10_000,
+              );
+              if (valid.exitCode !== 0 || valid.stdout.trim() !== "true") broken.push(task);
+            }
+            add(
+              "worktrees:huérfanos",
+              orphan.length > 0 ? "warn" : "ok",
+              orphan.length > 0 ? `${orphan.length} worktree(s) fuera del plan: ${orphan.join(", ")}` : "sin worktrees huérfanos",
+            );
+            add(
+              "worktrees:registrados",
+              missing.length > 0 ? "warn" : "ok",
+              missing.length > 0 ? `${missing.length} worktree(s) del plan no existen: ${missing.map((task) => task.worktree).join(", ")}` : "todos los worktrees del plan existen",
+            );
+            add(
+              "worktrees:rotos",
+              broken.length > 0 ? "warn" : "ok",
+              broken.length > 0 ? `${broken.length} worktree(s) con .git roto: ${broken.map((task) => task.worktree).join(", ")}` : "sin worktrees con .git roto",
+            );
+            add("worktrees:raíz", "ok", localRoot);
+            const stale = await deps.planStore.listStalePlanTasks(project.projectId, 90);
+            add(
+              "plan:tareas_colgadas",
+              stale.length > 0 ? "warn" : "ok",
+              stale.length > 0 ? `${stale.length} tarea(s) running/review sin actualizar > 90 min` : "sin tareas colgadas",
+            );
+          } catch (error) {
+            add("orquestación:worktrees", "warn", error instanceof Error ? error.message : String(error));
           }
         }
 
