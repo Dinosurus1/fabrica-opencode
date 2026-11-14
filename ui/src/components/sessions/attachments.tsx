@@ -98,12 +98,19 @@ export function useFileAttachments() {
     setError(null);
   };
 
+  const replace = (next: PendingAttachment[]) => {
+    filesRef.current = next;
+    setFiles(next);
+    setError(null);
+  };
+
   const clear = () => {
+    filesRef.current = [];
     setFiles([]);
     setError(null);
   };
 
-  return { files, add, remove, clear, error, setError, reading };
+  return { files, add, remove, replace, clear, error, setError, reading };
 }
 
 export function AttachmentButton({

@@ -42,9 +42,48 @@ interface NewChatRequest extends NewChatDraft {
 }
 
 interface OptimisticMessage {
+  sessionId: string;
   text: string;
   createdAt: number;
   files: PromptFileAttachment[];
+}
+
+const SELECTED_SESSION_KEY = "factory.sessions.selected";
+const ONLY_PROJECT_KEY = "factory.sessions.onlyProject";
+const SUBAGENTS_KEY = "factory.sessions.subagents";
+const DRAFT_PREFIX = "factory.sessions.draft.";
+
+function readFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function storeValue(key: string, value: string | null) {
+  try {
+    if (value === null || value === "") localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {
+    // localStorage puede no estar disponible (modo privado); el estado sigue en memoria.
+  }
+}
+
+function readDraft(sessionId: string): string {
+  return readStored(`${DRAFT_PREFIX}${sessionId}`) ?? "";
+}
+
+function writeDraft(sessionId: string, value: string) {
+  storeValue(`${DRAFT_PREFIX}${sessionId}`, value.trim() ? value : null);
 }
 
 function toPromptFiles(files: PendingAttachment[]): PromptFileAttachment[] {
@@ -139,25 +178,31 @@ export function SessionsPage() {
   const directory = project?.canonical;
   const queryClient = useQueryClient();
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => readStored(SELECTED_SESSION_KEY));
   const [query, setQuery] = useState("");
-  const [onlyProject, setOnlyProject] = useState(false);
-  const [showSubagents, setShowSubagents] = useState(false);
-  const [listOpen, setListOpen] = useState(true);
+  const [onlyProject, setOnlyProject] = useState(() => readFlag(ONLY_PROJECT_KEY));
+  const [showSubagents, setShowSubagents] = useState(() => readFlag(SUBAGENTS_KEY));
+  const [listOpen, setListOpen] = useState(() => !readStored(SELECTED_SESSION_KEY));
   const [agent, setAgent] = useState("");
   const [model, setModel] = useState("");
   const [prompt, setPrompt] = useState("");
   const [newChat, setNewChat] = useState<NewChatDraft | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [pendingRun, setPendingRun] = useState(false);
+  const [pendingSessions, setPendingSessions] = useState<Set<string>>(() => new Set());
   const [optimistic, setOptimistic] = useState<OptimisticMessage | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [dragging, setDragging] = useState(false);
   const attachments = useFileAttachments();
+  const attachmentsRef = useRef<PendingAttachment[]>([]);
+  attachmentsRef.current = attachments.files;
+  const attachmentDrafts = useRef(new Map<string, PendingAttachment[]>());
+  const previousSessionRef = useRef<string | null>(null);
   const draftAttachments = useFileAttachments();
   const didInit = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedRef = useRef<string | null>(null);
+  const promptRef = useRef(prompt);
+  promptRef.current = prompt;
   const listTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const contextTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -191,7 +236,30 @@ export function SessionsPage() {
     () => runningSessionIds(active.data, sessions.data ?? []),
     [active.data, sessions.data],
   );
-  const running = Boolean(selectedId && (runningIds.has(selectedId) || pendingRun));
+  const visibleRunning = useMemo(() => {
+    const next = new Set(runningIds);
+    for (const id of pendingSessions) next.add(id);
+    return next;
+  }, [runningIds, pendingSessions]);
+  const running = Boolean(selectedId && visibleRunning.has(selectedId));
+
+  const markPending = (sessionId: string) => {
+    setPendingSessions((current) => {
+      if (current.has(sessionId)) return current;
+      const next = new Set(current);
+      next.add(sessionId);
+      return next;
+    });
+  };
+
+  const clearPending = (sessionId: string) => {
+    setPendingSessions((current) => {
+      if (!current.has(sessionId)) return current;
+      const next = new Set(current);
+      next.delete(sessionId);
+      return next;
+    });
+  };
 
   const context = useQuery({
     queryKey: ["opencode", "session-context", selectedId],
@@ -222,20 +290,22 @@ export function SessionsPage() {
     const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : undefined;
     const streaming = STREAM_EVENTS.has(event.type);
     if (event.type.startsWith("session.") && !streaming) invalidateSessions(600);
-    if (!sessionID || sessionID !== selectedRef.current) return;
 
-    if (TERMINAL_EVENTS.has(event.type)) {
-      setPendingRun(false);
-      invalidateContext(0);
+    // El estado de "trabajando" se resuelve por sesión, aunque el evento sea
+    // de otra conversación distinta a la abierta.
+    if (sessionID && TERMINAL_EVENTS.has(event.type)) {
+      clearPending(sessionID);
+      if (sessionID === selectedRef.current) invalidateContext(0);
       return;
     }
-    if (event.type === "session.execution.started") {
-      setPendingRun(true);
-      invalidateContext(300);
+    if (sessionID && event.type === "session.execution.started") {
+      markPending(sessionID);
+      if (sessionID === selectedRef.current) invalidateContext(300);
       return;
     }
+    if (!sessionID || sessionID !== selectedRef.current) return;
     if (streaming) {
-      setPendingRun(true);
+      markPending(sessionID);
       invalidateContext(900);
     }
   });
@@ -264,6 +334,31 @@ export function SessionsPage() {
     setModel(selected.model ? `${selected.model.providerID}/${selected.model.id}` : "");
   }, [selected?.id, selected?.agent, selected?.model?.id, selected?.model?.providerID]);
 
+  // Cada conversación conserva su borrador y sus adjuntos pendientes. El texto
+  // se guarda en localStorage; los adjuntos quedan en memoria mientras la
+  // pestaña siga abierta.
+  useEffect(() => {
+    const previous = previousSessionRef.current;
+    if (previous && previous !== selectedId) {
+      attachmentDrafts.current.set(previous, attachmentsRef.current);
+    }
+    previousSessionRef.current = selectedId;
+    setPrompt(selectedId ? readDraft(selectedId) : "");
+    attachments.replace(selectedId ? attachmentDrafts.current.get(selectedId) ?? [] : []);
+  }, [selectedId]);
+
+  useEffect(() => {
+    storeValue(SELECTED_SESSION_KEY, selectedId);
+  }, [selectedId]);
+
+  useEffect(() => {
+    storeValue(ONLY_PROJECT_KEY, onlyProject ? "1" : null);
+  }, [onlyProject]);
+
+  useEffect(() => {
+    storeValue(SUBAGENTS_KEY, showSubagents ? "1" : null);
+  }, [showSubagents]);
+
   useEffect(() => {
     if (didInit.current || !sessions.data) return;
     didInit.current = true;
@@ -282,7 +377,7 @@ export function SessionsPage() {
   }, [sessions.data, selectedId, filtered]);
 
   useEffect(() => {
-    if (!optimistic) return;
+    if (!optimistic || optimistic.sessionId !== selectedId) return;
     const found = (context.data ?? []).some((message) => {
       if (message.type !== "user" || messageText(message) !== optimistic.text) return false;
       if (optimistic.files.length === 0) return true;
@@ -290,7 +385,7 @@ export function SessionsPage() {
       return optimistic.files.every((file) => names.has(file.name ?? ""));
     });
     if (found) setOptimistic(null);
-  }, [context.data, optimistic]);
+  }, [context.data, optimistic, selectedId]);
 
   useEffect(() => {
     const node = textareaRef.current;
@@ -300,10 +395,10 @@ export function SessionsPage() {
   }, [prompt]);
 
   useEffect(() => {
-    if (!pendingRun) return;
-    const timer = setTimeout(() => setPendingRun(false), 120_000);
+    if (pendingSessions.size === 0) return;
+    const timer = setTimeout(() => setPendingSessions(new Set()), 120_000);
     return () => clearTimeout(timer);
-  }, [pendingRun]);
+  }, [pendingSessions]);
 
   useEffect(() => {
     if (!optimistic) return;
@@ -320,7 +415,10 @@ export function SessionsPage() {
 
   const switchAgent = useMutation({
     mutationFn: (nextAgent: string) => api.switchAgent(selectedId!, nextAgent),
-    onSuccess: () => invalidateContext(0),
+    onSuccess: () => {
+      invalidateContext(0);
+      invalidateSessions(0);
+    },
     onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
   });
 
@@ -332,26 +430,51 @@ export function SessionsPage() {
         id: ref.slice(slash + 1),
       });
     },
-    onSuccess: () => invalidateContext(0),
+    onSuccess: () => {
+      invalidateContext(0);
+      invalidateSessions(0);
+    },
     onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
   });
 
   const send = useMutation({
-    mutationFn: ({ text, files }: { text: string; files: PendingAttachment[] }) =>
-      api.prompt(selectedId!, text, toPromptInputFiles(files)),
-    onMutate: ({ text, files }) => {
+    mutationFn: ({
+      sessionId,
+      text,
+      files,
+    }: {
+      sessionId: string;
+      text: string;
+      files: PendingAttachment[];
+    }) => api.prompt(sessionId, text, toPromptInputFiles(files)),
+    onMutate: ({ sessionId, text, files }) => {
       setNotice(null);
-      setPendingRun(true);
-      setOptimistic({ text, createdAt: Date.now(), files: toPromptFiles(files) });
+      markPending(sessionId);
+      if (sessionId === selectedRef.current) {
+        setOptimistic({ sessionId, text, createdAt: Date.now(), files: toPromptFiles(files) });
+      }
     },
-    onSuccess: () => {
-      setPrompt("");
-      attachments.clear();
+    onSuccess: (_result, { sessionId, text, files }) => {
+      // No borrar lo que el usuario haya escrito o adjuntado mientras el envío
+      // estaba en curso: solo se retira lo que formaba parte de este mensaje.
+      if (promptRef.current === text) {
+        writeDraft(sessionId, "");
+        if (selectedRef.current === sessionId) setPrompt("");
+      }
+      const sent = new Set(files.map((file) => file.id));
+      const remaining = (attachmentDrafts.current.get(sessionId) ?? []).filter(
+        (file) => !sent.has(file.id),
+      );
+      if (remaining.length > 0) attachmentDrafts.current.set(sessionId, remaining);
+      else attachmentDrafts.current.delete(sessionId);
+      if (selectedRef.current === sessionId) {
+        for (const file of files) attachments.remove(file.id);
+      }
       invalidateContext(0);
     },
-    onError: (error) => {
-      setOptimistic(null);
-      setPendingRun(false);
+    onError: (error, { sessionId }) => {
+      setOptimistic((current) => (current?.sessionId === sessionId ? null : current));
+      clearPending(sessionId);
       setNotice(error instanceof Error ? error.message : String(error));
     },
   });
@@ -364,10 +487,14 @@ export function SessionsPage() {
         (current ?? []).filter((session) => session.id !== id),
       );
       queryClient.removeQueries({ queryKey: ["opencode", "session-context", id] });
+      writeDraft(id, "");
+      attachmentDrafts.current.delete(id);
+      clearPending(id);
+      setOptimistic((current) => (current?.sessionId === id ? null : current));
       if (selectedId === id) {
+        previousSessionRef.current = null;
         setSelectedId(null);
         setPrompt("");
-        setOptimistic(null);
         attachments.clear();
       }
       invalidateSessions(0);
@@ -379,10 +506,10 @@ export function SessionsPage() {
   });
 
   const interrupt = useMutation({
-    mutationFn: () => api.interrupt(selectedId!),
-    onSuccess: () => {
-      setPendingRun(false);
-      invalidateContext(0);
+    mutationFn: (sessionId: string) => api.interrupt(sessionId),
+    onSuccess: (_result, sessionId) => {
+      clearPending(sessionId);
+      if (selectedRef.current === sessionId) invalidateContext(0);
     },
     onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
   });
@@ -420,7 +547,7 @@ export function SessionsPage() {
       draftAttachments.clear();
       setSelectedId(created.id);
       setListOpen(false);
-      setPendingRun(prompted && !promptError);
+      if (prompted && !promptError) markPending(created.id);
       setNotice(promptError ? `Sesión creada, pero el primer prompt falló: ${promptError}` : null);
       queryClient.setQueryData(["opencode", "sessions"], (current: Session[] | undefined) => [
         created,
@@ -467,7 +594,7 @@ export function SessionsPage() {
 
   const transcript = useMemo(() => {
     const messages = context.data ?? [];
-    if (!optimistic) return messages;
+    if (!optimistic || optimistic.sessionId !== selectedId) return messages;
     const alreadyThere = messages.some(
       (message) => message.type === "user" && messageText(message) === optimistic.text,
     );
@@ -476,10 +603,11 @@ export function SessionsPage() {
       id: `pending-${optimistic.createdAt}`,
       type: "user",
       text: optimistic.text,
+      files: optimistic.files,
       time: { created: optimistic.createdAt },
     };
     return [...messages, pending];
-  }, [context.data, optimistic]);
+  }, [context.data, optimistic, selectedId]);
 
   const defaultChatAgent = (session: Session | null) =>
     chatAgents.find((item) => item.id === session?.agent)?.id ?? chatAgents[0]?.id ?? "factory";
@@ -508,18 +636,22 @@ export function SessionsPage() {
   };
 
   const selectSession = (id: string) => {
+    setListOpen(false);
+    if (id === selectedId) return;
     setSelectedId(id);
     setNotice(null);
-    setOptimistic(null);
-    setPrompt("");
-    attachments.clear();
-    setListOpen(false);
+  };
+
+  const updatePrompt = (value: string) => {
+    setPrompt(value);
+    if (selectedId) writeDraft(selectedId, value);
   };
 
   const sendPrompt = () => {
     const text = prompt.trim();
+    if (!selectedId) return;
     if ((!text && attachments.files.length === 0) || send.isPending || attachments.reading) return;
-    send.mutate({ text, files: attachments.files });
+    send.mutate({ sessionId: selectedId, text, files: attachments.files });
   };
 
   const liveTone = live.status === "live" ? "live" : live.status === "offline" ? "offline" : "connecting";
@@ -551,7 +683,7 @@ export function SessionsPage() {
       >
         <SessionList
           sessions={filtered}
-          runningIds={runningIds}
+          runningIds={visibleRunning}
           selectedId={selectedId}
           loading={sessions.isLoading}
           liveLabel={liveLabel}
@@ -676,7 +808,7 @@ export function SessionsPage() {
                   <Button
                     variant="danger"
                     className="h-8 px-2 text-xs sm:px-2.5"
-                    onClick={() => interrupt.mutate()}
+                    onClick={() => selectedId && interrupt.mutate(selectedId)}
                     disabled={interrupt.isPending}
                     title="Interrumpir la ejecución"
                   >
@@ -832,7 +964,7 @@ export function SessionsPage() {
                     ref={textareaRef}
                     rows={1}
                     value={prompt}
-                    onChange={(event) => setPrompt(event.target.value)}
+                    onChange={(event) => updatePrompt(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && !event.shiftKey) {
                         event.preventDefault();
