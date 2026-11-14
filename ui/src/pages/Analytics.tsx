@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { BarChart3, DollarSign, Gauge, Wrench } from "lucide-react";
 import {
   Bar,
@@ -13,11 +14,11 @@ import {
   YAxis,
 } from "recharts";
 import { useProject } from "../components/ProjectContext";
-import { EmptyState, ErrorState, PageHeader, Section, Spinner, StatCard } from "../components/ui";
+import { Badge, EmptyState, ErrorState, PageHeader, Section, Spinner, StatCard } from "../components/ui";
 import { api } from "../lib/api";
 import { formatCompact, formatNumber, formatUsd } from "../lib/format";
 import { rpc } from "../lib/rpc";
-import type { AnalyticsSummary, SessionStats } from "../lib/types";
+import type { AnalyticsSummary, ModelHistoryRecord, SessionStats } from "../lib/types";
 
 const tooltipStyle = {
   background: "#0f131a",
@@ -32,15 +33,27 @@ const COLORS = ["#7c5cff", "#a78bfa", "#3fb950", "#d29922", "#f85149", "#38bdf8"
 export function AnalyticsPage() {
   const { projectId, project } = useProject();
   const directory = project?.canonical;
+  const [historyRole, setHistoryRole] = useState("implementer");
   const analytics = useQuery({
     queryKey: ["factory", "analytics", projectId, 30],
     queryFn: () => rpc<AnalyticsSummary>("analytics.summary", { project_id: projectId, days: 30 }, directory),
     enabled: Boolean(projectId),
   });
   const stats = useQuery({ queryKey: ["opencode", "stats", directory ?? "default"], queryFn: () => api.stats(directory) });
+  const history = useQuery({
+    queryKey: ["factory", "model-history", historyRole, directory ?? "default"],
+    queryFn: () =>
+      rpc<{ role: string; count: number; history: ModelHistoryRecord[] }>(
+        "models.history",
+        { role: historyRole },
+        directory,
+      ),
+    enabled: Boolean(projectId),
+  });
 
   const totals = analytics.data?.totals ?? {};
-  const cost = Number(totals.subtask_cost ?? 0) + Number(totals.review_cost ?? 0);
+  const logCost = Number(totals.execution_cost ?? 0);
+  const cost = logCost > 0 ? logCost : Number(totals.subtask_cost ?? 0) + Number(totals.review_cost ?? 0);
   const totalRuns = (analytics.data?.by_model ?? []).reduce((sum, row) => sum + row.runs, 0);
   const totalTokens = (analytics.data?.by_model ?? []).reduce(
     (sum, row) => sum + Number(row.tokens_input ?? 0) + Number(row.tokens_output ?? 0),
@@ -71,6 +84,11 @@ export function AnalyticsPage() {
       <PageHeader
         title="Analytics"
         subtitle="Consumo, coste y rendimiento de la fábrica. El coste de catálogo es una estimación; no es una factura."
+        actions={
+          <Badge tone="violet">
+            fuente: {analytics.data?.source === "execution_log" ? "execution log" : "subtasks/reviews"}
+          </Badge>
+        }
       />
 
       {analytics.error || stats.error ? (
@@ -156,6 +174,65 @@ export function AnalyticsPage() {
                     <td className="px-4 py-2.5 text-[11px] text-muted">{formatCompact(Number(row.tokens_input ?? 0))}</td>
                     <td className="px-4 py-2.5 text-[11px] text-muted">{formatCompact(Number(row.tokens_output ?? 0))}</td>
                     <td className="px-4 py-2.5 text-[11px] text-muted">{formatUsd(row.cost)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
+
+      <Section
+        title="Historial por rol"
+        description="Tasa de éxito, coste medio y tokens medios por modelo según el execution log."
+        actions={
+          <select
+            className="field h-8 w-40 text-xs"
+            value={historyRole}
+            onChange={(event) => setHistoryRole(event.target.value)}
+          >
+            {["implementer", "code", "qa", "security", "plan", "orchestration"].map((role) => (
+              <option key={role} value={role}>
+                {role}
+              </option>
+            ))}
+          </select>
+        }
+      >
+        {history.isLoading ? (
+          <div className="p-6">
+            <Spinner />
+          </div>
+        ) : history.isError ? (
+          <ErrorState error={history.error} onRetry={() => void history.refetch()} />
+        ) : (history.data?.history.length ?? 0) === 0 ? (
+          <EmptyState title="Sin historial" description="Aún no hay ejecuciones cerradas para este rol." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-left">
+              <thead className="bg-carbon-850">
+                <tr>
+                  <th className="table-head px-4 py-2.5">Modelo</th>
+                  <th className="table-head px-4 py-2.5">Ejecuciones</th>
+                  <th className="table-head px-4 py-2.5">Éxito</th>
+                  <th className="table-head px-4 py-2.5">Coste medio</th>
+                  <th className="table-head px-4 py-2.5">Tokens medios</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.data!.history.map((row) => (
+                  <tr key={`${row.providerId}/${row.modelId}`} className="table-row">
+                    <td className="px-4 py-2.5 font-mono text-[11px] text-ink">
+                      {row.providerId}/{row.modelId}
+                    </td>
+                    <td className="px-4 py-2.5 text-[11px] text-muted">{row.runs}</td>
+                    <td className="px-4 py-2.5 text-[11px] text-muted">
+                      {row.runs > 0 ? `${Math.round((row.successes / row.runs) * 100)}%` : "—"}
+                    </td>
+                    <td className="px-4 py-2.5 text-[11px] text-muted">{formatUsd(row.avgCostUsd)}</td>
+                    <td className="px-4 py-2.5 text-[11px] text-muted">
+                      {row.avgTokens !== null ? formatCompact(row.avgTokens) : "—"}
+                    </td>
                   </tr>
                 ))}
               </tbody>

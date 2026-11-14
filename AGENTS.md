@@ -24,6 +24,7 @@
 - Activa `product-analyst`, `architect` y `tech-writer` solo cuando la etapa lo requiera; cada uno tiene un entregable verificable y no duplica responsabilidades.
 - La fuente de verdad de tareas, compuertas y revisiones es PostgreSQL; `docs/` guarda especificaciones, arquitectura y runbooks. La carta de gobierno está en `docs/factory-charter.md`.
 - La consola web vive en `ui/`; consume el API de OpenCode y el RPC de la fábrica. No es una fuente de verdad ni sustituye las compuertas.
+- La selección de agentes, los modos de modelo y los presupuestos se aplican con tools (`factory_agents_*`, `budget_*`, `subtask_run`, `review_run`). No los esquives ni amplíes sin aprobación.
 - Toda entrega exige evidencia y validación independiente; push, deploy, migraciones destructivas y cambios de alcance requieren confirmación humana.
 
 ## Memoria persistente

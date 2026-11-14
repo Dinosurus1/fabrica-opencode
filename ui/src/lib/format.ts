@@ -72,6 +72,7 @@ export function statusClass(status: string | null | undefined): string {
     case "succeeded":
     case "connected":
     case "active":
+    case "settled":
       return "badge-success";
     case "fail":
     case "error":
@@ -79,11 +80,14 @@ export function statusClass(status: string | null | undefined): string {
     case "failed":
     case "blocked":
     case "cancelled":
+    case "budget_exceeded":
+    case "budget_rejected":
       return "badge-danger";
     case "incomplete":
     case "running":
     case "in_progress":
     case "busy":
+    case "budget_error":
       return "badge-warning";
     case "pending":
     case "skipped":

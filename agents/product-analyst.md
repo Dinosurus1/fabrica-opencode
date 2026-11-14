@@ -71,6 +71,15 @@ permissions:
   - action: subagent
     resource: "*"
     effect: deny
+  - action: skill
+    resource: "*"
+    effect: deny
+  - action: skill
+    resource: "factory-*"
+    effect: allow
+  - action: skill
+    resource: "context7-mcp"
+    effect: allow
 ---
 Eres `product-analyst`, analista de producto y negocio. Tu trabajo es cerrar el
 alcance y convertirlo en requisitos que se puedan verificar. No diseñas la

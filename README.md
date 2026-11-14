@@ -168,11 +168,13 @@ No modifica la tabla `memories` ni el esquema de `opencode-memory`; crea
 `plan_reviews`, `plan_validations`, `subtask_runs`, `phase_closures`,
 `factory_meta`, `factory_models`, `factory_agent_catalog`,
 `factory_execution_profiles`, `factory_profile_assignments`,
-`factory_audit_events` y `factory_execution_log`. Las migraciones 004, 005 y 006
-son aditivas y dejan `schema_version=6`; la 005 añade `review_exhausted`,
-`residual_findings`, `approval_waiver` y las métricas por ronda del
-plan-reviewer; la 006 añade el catálogo MAM, perfiles, asignaciones, auditoría y
-registro de ejecución.
+`factory_audit_events`, `factory_execution_log`, `factory_budgets`,
+`factory_budget_reservations` y `factory_model_prices`. Las migraciones 004, 005,
+006 y 007 son aditivas y dejan `schema_version=7`; la 005 añade
+`review_exhausted`, `residual_findings`, `approval_waiver` y las métricas por
+ronda del plan-reviewer; la 006 añade el catálogo MAM, perfiles, asignaciones,
+auditoría y registro de ejecución; la 007 añade presupuestos con reservas
+atómicas y precios versionados.
 
 `factory_doctor` da `warn` si faltan `memories` o `capture_state`. Sin memoria,
 las compuertas y las revisiones funcionan, pero `task_close` no puede cerrar.
@@ -242,10 +244,12 @@ Módulos: Overview, Sessions, Work, Agents, Models, Memory, Projects, Skills,
 Analytics y Settings. La UI envía `location[directory]` del proyecto
 seleccionado para que los modelos y permisos se apliquen a la location correcta.
 
-En esta etapa la UI puede crear/aplicar perfiles de modelo, cambiar el
-agente/modelo de una sesión, enviar prompts, interrumpir y gestionar memoria.
-Configuración, permisos y proveedores se muestran en solo lectura. El detalle
-está en `ui/README.md`.
+En esta etapa la UI puede crear/aplicar perfiles de modelo, editar la política
+(permitidos, prohibidos, contexto mínimo, tools), fijar presupuestos, seleccionar
+agentes y aplicarlos a la sesión, cambiar el agente/modelo de una sesión, enviar
+prompts, interrumpir, ver el execution log y gestionar memoria. Configuración,
+permisos de archivos y proveedores se muestran en solo lectura. El detalle está
+en `ui/README.md`.
 
 ## Modo por fases
 
@@ -284,7 +288,7 @@ completa está en `docs/orchestration.md`; este es el resumen:
    worktrees, detecta huérfanos y tareas colgadas.
 
 Autonomía por defecto: `supervised`. La concurrencia por defecto es 3 y se
-configura por plan. El estado vive en PostgreSQL (migraciones 004, 005 y 006), así
+configura por plan. El estado vive en PostgreSQL (migraciones 004, 005, 006 y 007), así
 que una sesión interrumpida no pierde el plan. Los worktrees viven fuera de
 `/tmp`, en `~/.local/share/opencode/worktrees/<proyecto>/`.
 
@@ -304,7 +308,24 @@ aplican por location de OpenCode:
 
 Tools: `model_catalog_sync`, `model_catalog_list`, `agent_catalog_list`,
 `model_profile_list`, `model_profile_get`, `model_profile_validate`,
-`model_profile_set`, `model_profile_delete`, `model_profile_apply`, `mam_status`.
+`model_profile_set`, `model_profile_delete`, `model_profile_apply`, `mam_status`,
+`factory_agents_*`, `budget_list`, `budget_set`, `executions_list` y
+`model_history`.
+
+**Modos de modelo:** `manual` usa el modelo asignado por rol; `auto` elige en
+código combinando política, factibilidad, presupuesto e historial de éxito/coste;
+`hybrid` es auto con aprobación en tareas sensibles, modelos más caros o
+reintentos. El LLM solo aporta la clasificación de dificultad.
+
+**Presupuesto:** `subtask_run` y `review_run` reservan tokens/coste de forma
+atómica antes de crear la sesión y liquidan el uso real al terminar. La jerarquía
+es global, fase y tarea; si la reserva no cabe, el lanzamiento falla. `max_tokens`
+es el límite principal cuando el proveedor es de tarifa plana o gratuita.
+
+**Execution log:** cada ejecución escribe una fila al empezar y otra al terminar,
+con proyecto, fase, tarea, agente, modelo, modo, motivo de selección, tokens,
+coste, estado, intento, error, versiones y referencia al gate. Alimenta
+`executions_list`, `model_history` y Analytics.
 
 RPC para la consola web: `/api/rpc/opencode.factory/*` (`models.*`, `agents.list`,
 `profiles.*`, `work.*`, `memory.*`, `analytics.summary`, `health`).
@@ -323,6 +344,14 @@ Reglas:
 La UI de `ui/` permite sincronizar el catálogo, editar perfiles, asignar modelos
 por rol, aplicar con confirmación y ver el modelo activo y el del perfil. La
 lógica de negocio está en `tools/factory/mam-db.ts` y `tools/factory/mam.ts`.
+
+## Skills por agente
+
+Cada agente declara reglas `skill` en su frontmatter: `*` denegado y solo se
+permiten las skills de su rol. Los agentes de la fábrica permiten `factory-*` y
+`context7-mcp`; `tech-writer` añade `docx`, `pdf`, `pptx` y `xlsx`; el resto no
+carga skills que no necesita. Las skills globales no permitidas no se listan en
+la sesión del agente y no gastan contexto.
 
 ## Modelos por rol y cómo cambiarlos
 
@@ -388,6 +417,8 @@ archivo fuera de `files_owned`.
 | `phase_close`, `plan_resume` | Cierre de fase y reconciliación de sesiones/worktrees. | `phase_close` exige gate, revisiones, memoria y `confirmed` en `supervised`. |
 | `model_catalog_sync`, `model_catalog_list`, `agent_catalog_list` | Sincronización y lectura del catálogo MAM. | Sin shell; escribe `factory_models` y `factory_agent_catalog`. |
 | `model_profile_*`, `mam_status` | Perfiles, validación, aplicación y resumen. | `model_profile_apply` transforma agentes por location; exige `confirmed=true`; audita en `factory_audit_events`. |
+| `factory_agents_*` | Selección de agentes manual/híbrida/auto y recomendación determinística. | `factory_agents_apply` actualiza las reglas `subagent` de la sesión; exige `confirmed=true`. |
+| `budget_list`, `budget_set`, `executions_list`, `model_history` | Presupuestos, execution log y evaluación de modelos. | `budget_set` exige `confirmed=true`; las reservas/liquidaciones de `subtask_run`/`review_run` son atómicas en PostgreSQL. |
 | `factory_doctor` | `--version` de escáneres, consultas a PostgreSQL y worktrees. | Sin escritura. |
 | `memory_*` | PostgreSQL + Ollama, si `opencode-memory` está instalado. | Fuera de este repo. |
 

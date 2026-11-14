@@ -8,6 +8,15 @@
 
 import type { QueryFn } from "../../tools/factory/db.js";
 import {
+  AGENT_CATALOG,
+  applySelectionPermissions,
+  approvedFor,
+  getSelection,
+  recommendAgents,
+  validateSelected,
+  type AgentMode,
+} from "../../tools/factory/agents.js";
+import {
   applyProfileFromStore,
   parseProfileInput,
   syncCatalogFromRuntime,
@@ -416,49 +425,199 @@ export function createFactoryRpcHandlers(deps: FactoryRpcDeps) {
       return { deleted };
     },
 
+    async "budgets.list"(input: Record<string, unknown>) {
+      const project = projectId(input, deps.defaultProjectId);
+      const budgets = await mam.store.listBudgets(project);
+      return { project_id: project, count: budgets.length, budgets };
+    },
+
+    async "budgets.set"(input: Record<string, unknown>) {
+      if (input.confirmed !== true) return { saved: false, requires_confirmation: true };
+      const project = projectId(input, deps.defaultProjectId);
+      const scope = asString(input.scope) as "global" | "phase" | "task";
+      if (!["global", "phase", "task"].includes(scope)) {
+        throw new Error("scope debe ser global, phase o task.");
+      }
+      if (scope === "phase" && (!asString(input.plan_id) || typeof input.phase !== "number")) {
+        throw new Error("El presupuesto de fase requiere plan_id y phase.");
+      }
+      if (scope === "task" && !asString(input.task_id)) {
+        throw new Error("El presupuesto de tarea requiere task_id.");
+      }
+      const budget = await mam.store.setBudget({
+        scope,
+        projectId: project,
+        planId: asString(input.plan_id) || null,
+        phase: typeof input.phase === "number" ? Math.round(input.phase) : null,
+        taskId: asString(input.task_id) || null,
+        maxTokens: typeof input.max_tokens === "number" ? Math.round(input.max_tokens) : null,
+        maxCostUsd: typeof input.max_cost_usd === "number" ? input.max_cost_usd : null,
+      });
+      await mam.store.audit("budget.set", budget.key, {
+        scope,
+        maxTokens: budget.maxTokens,
+        maxCostUsd: budget.maxCostUsd,
+      });
+      return { saved: true, budget };
+    },
+
+    async "executions.list"(input: Record<string, unknown>) {
+      const project = projectId(input, deps.defaultProjectId);
+      const executions = await mam.store.listExecutions({
+        projectId: project,
+        agentId: asString(input.agent_id) || undefined,
+        modelId: asString(input.model_id) || undefined,
+        status: asString(input.status) || undefined,
+        role: asString(input.role) || undefined,
+        limit: asNumber(input.limit, 100),
+        offset: asNumber(input.offset, 0),
+      });
+      return { project_id: project, count: executions.length, executions };
+    },
+
+    async "models.history"(input: Record<string, unknown>) {
+      const role = asString(input.role);
+      if (!role) throw new Error("Falta role.");
+      const history = await mam.store.modelHistory(role);
+      return { role, count: history.length, history };
+    },
+
+    async "agents.selection.get"(input: Record<string, unknown>) {
+      const project = projectId(input, deps.defaultProjectId);
+      const selection = await getSelection(mam, project);
+      const recommendation = recommendAgents({});
+      return { project_id: project, selection, catalog: AGENT_CATALOG, recommendation };
+    },
+
+    async "agents.propose"(input: Record<string, unknown>) {
+      const recommendation = recommendAgents({
+        ambiguousScope: input.ambiguous_scope === true,
+        crossModule: input.cross_module === true,
+        phasePlan: input.phase_plan === true,
+        handoff: input.handoff === true,
+        research: input.research === true,
+        secondOpinion: input.second_opinion === true,
+      });
+      return { ...recommendation, catalog: AGENT_CATALOG };
+    },
+
+    async "agents.selection.set"(input: Record<string, unknown>) {
+      const project = projectId(input, deps.defaultProjectId);
+      const mode = asString(input.mode) as AgentMode;
+      if (!["auto", "manual", "hybrid"].includes(mode)) throw new Error("mode inválido.");
+      if (input.confirmed !== true && mode !== "auto") {
+        return { saved: false, requires_confirmation: true };
+      }
+      const selected = Array.isArray(input.selected) ? input.selected.map(String) : [];
+      const validation = validateSelected(selected);
+      if (!validation.valid) {
+        throw new Error(
+          `Selección inválida. Desconocidos: ${validation.unknown.join(", ") || "ninguno"}. Faltan requeridos: ${validation.missingRequired.join(", ") || "ninguno"}.`,
+        );
+      }
+      const recommendation = recommendAgents({});
+      const recommended = Array.isArray(input.recommended)
+        ? input.recommended.map(String)
+        : recommendation.recommended;
+      const selection = {
+        projectId: project,
+        mode,
+        selected,
+        recommended,
+        approved: approvedFor(mode, selected, recommended),
+        rationale: recommendation.rationale,
+        updatedAt: new Date().toISOString(),
+      };
+      await mam.store.setAgentSelection(selection);
+      let sessionApplied = false;
+      const sessionID = asString(input.session_id);
+      if (input.apply_session === true && sessionID) {
+        await applySelectionPermissions(mam.runtime, sessionID, selection.approved);
+        sessionApplied = true;
+      }
+      await mam.store.audit("agents.selection.set", project, {
+        mode,
+        selected,
+        approved: selection.approved,
+        sessionId: sessionApplied ? sessionID : null,
+      });
+      return { saved: true, selection, session_applied: sessionApplied };
+    },
+
     async "analytics.summary"(input: Record<string, unknown>) {
       const project = projectId(input, deps.defaultProjectId);
       const days = asNumber(input.days, 30);
-      const [byModel, byRole, byDay, totals] = await Promise.all([
-        query<Record<string, unknown>>(
-          `SELECT model,
+      const logCount = await query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM factory_execution_log
+         WHERE project_id = $1 AND started_at > now() - ($2::int || ' days')::interval`,
+        [project, days],
+      );
+      const useLog = Number(logCount.rows[0]?.count ?? 0) > 0;
+
+      const byModelQuery = useLog
+        ? `SELECT coalesce(provider_id || '/' || model_id, model_id, 'desconocido') AS model,
+                  sum(cost_usd)::numeric AS cost,
+                  sum(tokens_input)::bigint AS tokens_input,
+                  sum(tokens_output)::bigint AS tokens_output,
+                  count(*)::int AS runs
+           FROM factory_execution_log
+           WHERE project_id = $1 AND started_at > now() - ($2::int || ' days')::interval
+           GROUP BY provider_id, model_id ORDER BY cost DESC NULLS LAST`
+        : `SELECT model,
                   sum(cost_usd)::numeric AS cost,
                   sum(tokens_input)::bigint AS tokens_input,
                   sum(tokens_output)::bigint AS tokens_output,
                   count(*)::int AS runs
            FROM (
-             SELECT model, cost_usd, tokens_input, tokens_output, started_at AS at
+             SELECT model, cost_usd, tokens_input, tokens_output
              FROM subtask_runs WHERE started_at > now() - ($1::int || ' days')::interval
              UNION ALL
-             SELECT model, cost_usd, tokens_input, tokens_output, created_at AS at
+             SELECT model, cost_usd, tokens_input, tokens_output
              FROM review_runs WHERE created_at > now() - ($1::int || ' days')::interval
            ) runs
-           GROUP BY model ORDER BY cost DESC NULLS LAST`,
-          [days],
-        ),
-        query<Record<string, unknown>>(
-          `SELECT role, sum(cost_usd)::numeric AS cost, count(*)::int AS runs
+           GROUP BY model ORDER BY cost DESC NULLS LAST`;
+
+      const byRoleQuery = useLog
+        ? `SELECT coalesce(role, 'unknown') AS role,
+                  sum(cost_usd)::numeric AS cost,
+                  count(*)::int AS runs
+           FROM factory_execution_log
+           WHERE project_id = $1 AND started_at > now() - ($2::int || ' days')::interval
+           GROUP BY role ORDER BY cost DESC NULLS LAST`
+        : `SELECT role, sum(cost_usd)::numeric AS cost, count(*)::int AS runs
            FROM review_runs WHERE created_at > now() - ($1::int || ' days')::interval
-           GROUP BY role ORDER BY cost DESC NULLS LAST`,
-          [days],
-        ),
-        query<Record<string, unknown>>(
-          `SELECT to_char(day, 'YYYY-MM-DD') AS day, sum(cost)::numeric AS cost, sum(runs)::int AS runs
+           GROUP BY role ORDER BY cost DESC NULLS LAST`;
+
+      const byDayQuery = useLog
+        ? `SELECT to_char(date_trunc('day', started_at), 'YYYY-MM-DD') AS day,
+                  sum(cost_usd)::numeric AS cost,
+                  count(*)::int AS runs
+           FROM factory_execution_log
+           WHERE project_id = $1 AND started_at > now() - ($2::int || ' days')::interval
+           GROUP BY date_trunc('day', started_at) ORDER BY day`
+        : `SELECT to_char(day, 'YYYY-MM-DD') AS day, sum(cost)::numeric AS cost, sum(runs)::int AS runs
            FROM (
              SELECT date_trunc('day', started_at) AS day, cost_usd AS cost, 1 AS runs
              FROM subtask_runs WHERE started_at > now() - ($1::int || ' days')::interval
              UNION ALL
              SELECT date_trunc('day', created_at) AS day, cost_usd AS cost, 1 AS runs
              FROM review_runs WHERE created_at > now() - ($1::int || ' days')::interval
-           ) daily GROUP BY day ORDER BY day`,
-          [days],
-        ),
+           ) daily GROUP BY day ORDER BY day`;
+
+      const [byModel, byRole, byDay, totals] = await Promise.all([
+        query<Record<string, unknown>>(byModelQuery, useLog ? [project, days] : [days]),
+        query<Record<string, unknown>>(byRoleQuery, useLog ? [project, days] : [days]),
+        query<Record<string, unknown>>(byDayQuery, useLog ? [project, days] : [days]),
         query<Record<string, unknown>>(
           `SELECT
              (SELECT count(*)::int FROM tasks WHERE project_id = $1) AS tasks,
              (SELECT count(*)::int FROM plans WHERE project_id = $1) AS plans,
              (SELECT count(*)::int FROM gate_runs WHERE project_id = $1) AS gates,
              (SELECT count(*)::int FROM review_runs WHERE project_id = $1) AS reviews,
+             (SELECT count(*)::int FROM factory_execution_log
+              WHERE project_id = $1 AND started_at > now() - ($2::int || ' days')::interval) AS execution_runs,
+             (SELECT coalesce(sum(cost_usd), 0)::numeric FROM factory_execution_log
+              WHERE project_id = $1 AND started_at > now() - ($2::int || ' days')::interval) AS execution_cost,
              (SELECT coalesce(sum(cost_usd), 0)::numeric FROM subtask_runs
               WHERE started_at > now() - ($2::int || ' days')::interval) AS subtask_cost,
              (SELECT coalesce(sum(cost_usd), 0)::numeric FROM review_runs
@@ -469,6 +628,7 @@ export function createFactoryRpcHandlers(deps: FactoryRpcDeps) {
       return {
         project_id: project,
         days,
+        source: useLog ? "execution_log" : "subtask_review",
         by_model: byModel.rows.map(serializeRow),
         by_role: byRole.rows.map(serializeRow),
         by_day: byDay.rows.map(serializeRow),

@@ -93,6 +93,13 @@ generan avisos y mezclar V1/V2 en un mismo fichero hace que se ignoren campos.
   Models, Memory, Projects, Skills, Analytics y Settings. Proxy autenticado en
   `127.0.0.1:4173`.
 - **Modos de trabajo** `auto`, `manual` y `hybrid` guardados en el perfil.
+- **Selección de agentes** por proyecto (manual/híbrido/auto) aplicada como
+  reglas `subagent` de la sesión.
+- **Presupuestos** global/fase/tarea con reserva atómica y liquidación al
+  terminar; `max_tokens` como límite principal.
+- **Execution log** con inicio/fin, modelo, modo, motivo, tokens, coste, estado,
+  intento, error, versiones y gate; alimenta Analytics y la evaluación de modelos.
+- **Skills acotadas por agente** con reglas `skill` V2.
 
 ## Pendiente / siguiente iteración
 

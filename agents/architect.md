@@ -83,6 +83,15 @@ permissions:
   - action: subagent
     resource: "*"
     effect: deny
+  - action: skill
+    resource: "*"
+    effect: deny
+  - action: skill
+    resource: "factory-*"
+    effect: allow
+  - action: skill
+    resource: "context7-mcp"
+    effect: allow
 ---
 Eres `architect`, arquitecto de software. Diseñas la solución al tamaño real del
 problema, defines contratos y dejas decisiones trazables. No implementas y no

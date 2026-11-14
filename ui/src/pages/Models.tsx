@@ -21,6 +21,54 @@ import type { CatalogAgent, CatalogModel, Profile, ProfileAssignment } from "../
 interface AssignmentDraft {
   providerId: string;
   modelId: string;
+  maxCostUsd: number | null;
+  maxTokens: number | null;
+}
+
+interface PolicyDraft {
+  allowedProviders: string;
+  allowedModels: string;
+  prohibitedModels: string;
+  requireTools: boolean;
+  minContext: number;
+  noSilentFallback: boolean;
+}
+
+
+function splitList(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function buildPolicy(base: Record<string, unknown>, draft: PolicyDraft): Record<string, unknown> {
+  const policy = { ...base };
+  const providers = splitList(draft.allowedProviders);
+  const allowed = splitList(draft.allowedModels);
+  const prohibited = splitList(draft.prohibitedModels);
+  if (providers.length > 0) policy.allowedProviders = providers;
+  else delete policy.allowedProviders;
+  if (allowed.length > 0) policy.allowedModels = allowed;
+  else delete policy.allowedModels;
+  if (prohibited.length > 0) policy.prohibitedModels = prohibited;
+  else delete policy.prohibitedModels;
+  if (draft.requireTools === false) policy.requireTools = false;
+  else delete policy.requireTools;
+  if (draft.minContext > 0) policy.minContext = Math.round(draft.minContext);
+  else delete policy.minContext;
+  if (draft.noSilentFallback === false) policy.noSilentFallback = false;
+  else delete policy.noSilentFallback;
+  return policy;
+}
+
+function stable(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return JSON.stringify(value);
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+  );
 }
 
 export function ModelsPage() {
@@ -32,6 +80,14 @@ export function ModelsPage() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [mode, setMode] = useState<Profile["mode"]>("hybrid");
+  const [policyDraft, setPolicyDraft] = useState<PolicyDraft>({
+    allowedProviders: "",
+    allowedModels: "",
+    prohibitedModels: "",
+    requireTools: true,
+    minContext: 0,
+    noSilentFallback: true,
+  });
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmApply, setConfirmApply] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -74,9 +130,20 @@ export function ModelsPage() {
       next[assignment.agentId] = {
         providerId: assignment.providerId,
         modelId: assignment.modelId,
+        maxCostUsd: assignment.maxCostUsd ?? null,
+        maxTokens: assignment.maxTokens ?? null,
       };
     }
     setDraft(next);
+    const policy = current.policy ?? {};
+    setPolicyDraft({
+      allowedProviders: Array.isArray(policy.allowedProviders) ? policy.allowedProviders.join(", ") : "",
+      allowedModels: Array.isArray(policy.allowedModels) ? policy.allowedModels.join(", ") : "",
+      prohibitedModels: Array.isArray(policy.prohibitedModels) ? policy.prohibitedModels.join(", ") : "",
+      requireTools: policy.requireTools !== false,
+      minContext: typeof policy.minContext === "number" ? policy.minContext : 0,
+      noSilentFallback: policy.noSilentFallback !== false,
+    });
     setNotice(null);
   }, [profile.data]);
 
@@ -114,24 +181,32 @@ export function ModelsPage() {
     });
   }, [agents.data, draft]);
 
+  const effectivePolicy = useMemo(
+    () => buildPolicy((profile.data?.policy ?? {}) as Record<string, unknown>, policyDraft),
+    [profile.data, policyDraft],
+  );
+
   const dirty = useMemo(() => {
     const current = profile.data;
     if (!current) return false;
     if (name !== current.name || description !== (current.description ?? "") || mode !== current.mode) {
       return true;
     }
+    if (stable(current.policy ?? {}) !== stable(effectivePolicy)) return true;
     const currentMap = new Map(
       (current.assignments ?? []).map((assignment) => [
         assignment.agentId,
-        `${assignment.providerId}/${assignment.modelId}`,
+        `${assignment.providerId}/${assignment.modelId}|${assignment.maxCostUsd ?? ""}|${assignment.maxTokens ?? ""}`,
       ]),
     );
     const draftEntries = Object.entries(draft);
     if (draftEntries.length !== currentMap.size) return true;
     return draftEntries.some(
-      ([agentId, assignment]) => currentMap.get(agentId) !== `${assignment.providerId}/${assignment.modelId}`,
+      ([agentId, assignment]) =>
+        currentMap.get(agentId) !==
+        `${assignment.providerId}/${assignment.modelId}|${assignment.maxCostUsd ?? ""}|${assignment.maxTokens ?? ""}`,
     );
-  }, [profile.data, name, description, mode, draft]);
+  }, [profile.data, name, description, mode, draft, effectivePolicy]);
 
   const sync = useMutation({
     mutationFn: () => rpc<{ synced: { models: number; agents: number } }>("models.sync", {}, directory),
@@ -153,6 +228,8 @@ export function ModelsPage() {
         providerId: assignment.providerId,
         modelId: assignment.modelId,
         locked: true,
+        maxCostUsd: assignment.maxCostUsd,
+        maxTokens: assignment.maxTokens,
       }));
       return rpc<{ saved: boolean; issues?: Array<{ message: string; severity: string }> }>("profiles.upsert", {
         id: profile.data.id,
@@ -160,7 +237,7 @@ export function ModelsPage() {
         description,
         mode,
         is_default: profile.data.isDefault,
-        policy: profile.data.policy,
+        policy: effectivePolicy,
         assignments,
       }, directory);
     },
@@ -404,15 +481,15 @@ export function ModelsPage() {
                   <Field label="Nombre">
                     <input className="field" value={name} onChange={(event) => setName(event.target.value)} />
                   </Field>
-                  <Field label="Modo de trabajo" hint="Automático, manual o híbrido; se guarda con el perfil.">
+                  <Field label="Modo de modelo" hint="Manual fija el modelo por rol; auto elige en código; híbrido pide aprobación en tareas sensibles.">
                     <select
                       className="field"
                       value={mode}
                       onChange={(event) => setMode(event.target.value as Profile["mode"])}
                     >
-                      <option value="hybrid">Híbrido</option>
-                      <option value="auto">Automático</option>
-                      <option value="manual">Manual</option>
+                      <option value="hybrid">Híbrido (auto con aprobación)</option>
+                      <option value="auto">Automático (código + historial)</option>
+                      <option value="manual">Manual (modelo fijado por rol)</option>
                     </select>
                   </Field>
                 </div>
@@ -425,7 +502,7 @@ export function ModelsPage() {
                   />
                 </Field>
 
-                <div className="overflow-hidden rounded-lg border border-line">
+                <div className="overflow-x-auto rounded-lg border border-line">
                   <table className="w-full border-collapse text-left">
                     <thead className="bg-carbon-850">
                       <tr>
@@ -433,6 +510,8 @@ export function ModelsPage() {
                         <th className="table-head px-3 py-2">Rol</th>
                         <th className="table-head px-3 py-2">Modelo asignado</th>
                         <th className="table-head px-3 py-2">Contexto</th>
+                        <th className="table-head px-3 py-2">Máx. tokens</th>
+                        <th className="table-head px-3 py-2">Máx. coste</th>
                         <th className="table-head px-3 py-2">Tools</th>
                       </tr>
                     </thead>
@@ -451,7 +530,7 @@ export function ModelsPage() {
                             <td className="px-3 py-2 text-[11px] text-muted">{agent.role ?? "—"}</td>
                             <td className="px-3 py-2">
                               <select
-                                className="field h-8 text-xs"
+                                className="field h-8 min-w-[220px] text-xs"
                                 value={assignment ? `${assignment.providerId}/${assignment.modelId}` : ""}
                                 onChange={(event) => {
                                   const value = event.target.value;
@@ -468,7 +547,12 @@ export function ModelsPage() {
                                   const modelId = value.slice(slash + 1);
                                   setDraft((current) => ({
                                     ...current,
-                                    [agent.agentId]: { providerId, modelId },
+                                    [agent.agentId]: {
+                                      providerId,
+                                      modelId,
+                                      maxCostUsd: current[agent.agentId]?.maxCostUsd ?? null,
+                                      maxTokens: current[agent.agentId]?.maxTokens ?? null,
+                                    },
                                   }));
                                 }}
                               >
@@ -488,6 +572,44 @@ export function ModelsPage() {
                               {selected?.contextLimit ? formatCompact(selected.contextLimit) : "—"}
                             </td>
                             <td className="px-3 py-2">
+                              <input
+                                type="number"
+                                min={0}
+                                step={1000}
+                                className="field h-8 w-24 text-xs"
+                                value={assignment?.maxTokens ?? ""}
+                                placeholder="—"
+                                disabled={!assignment}
+                                onChange={(event) => {
+                                  if (!assignment) return;
+                                  const value = event.target.value === "" ? null : Math.max(0, Math.round(Number(event.target.value)));
+                                  setDraft((current) => ({
+                                    ...current,
+                                    [agent.agentId]: { ...current[agent.agentId]!, maxTokens: value },
+                                  }));
+                                }}
+                              />
+                            </td>
+                            <td className="px-3 py-2">
+                              <input
+                                type="number"
+                                min={0}
+                                step={0.01}
+                                className="field h-8 w-24 text-xs"
+                                value={assignment?.maxCostUsd ?? ""}
+                                placeholder="—"
+                                disabled={!assignment}
+                                onChange={(event) => {
+                                  if (!assignment) return;
+                                  const value = event.target.value === "" ? null : Math.max(0, Number(event.target.value));
+                                  setDraft((current) => ({
+                                    ...current,
+                                    [agent.agentId]: { ...current[agent.agentId]!, maxCostUsd: value },
+                                  }));
+                                }}
+                              />
+                            </td>
+                            <td className="px-3 py-2">
                               {selected ? (
                                 <Badge tone={selected.capabilities.tools ? "success" : "danger"}>
                                   {selected.capabilities.tools ? "tools" : "sin tools"}
@@ -502,6 +624,58 @@ export function ModelsPage() {
                     </tbody>
                   </table>
                 </div>
+
+                <details className="rounded-lg border border-line-soft bg-carbon-950/40 px-3 py-2">
+                  <summary className="cursor-pointer text-xs font-medium text-ink">Política de modelos</summary>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <Field label="Proveedores permitidos" hint="Separados por comas; vacío = todos.">
+                      <input
+                        className="field"
+                        value={policyDraft.allowedProviders}
+                        onChange={(event) => setPolicyDraft({ ...policyDraft, allowedProviders: event.target.value })}
+                        placeholder="opencode-go, opencode"
+                      />
+                    </Field>
+                    <Field label="Modelos permitidos" hint="provider/modelo separados por comas; vacío = todos.">
+                      <input
+                        className="field"
+                        value={policyDraft.allowedModels}
+                        onChange={(event) => setPolicyDraft({ ...policyDraft, allowedModels: event.target.value })}
+                        placeholder="opencode-go/glm-5.3-flash"
+                      />
+                    </Field>
+                    <Field label="Modelos prohibidos" hint="provider/modelo separados por comas.">
+                      <input
+                        className="field"
+                        value={policyDraft.prohibitedModels}
+                        onChange={(event) => setPolicyDraft({ ...policyDraft, prohibitedModels: event.target.value })}
+                        placeholder="opencode-go/gpt-5.5-pro"
+                      />
+                    </Field>
+                    <Field label="Contexto mínimo" hint="Tokens mínimos de ventana; 0 = sin mínimo.">
+                      <input
+                        type="number"
+                        min={0}
+                        step={1000}
+                        className="field"
+                        value={policyDraft.minContext}
+                        onChange={(event) => setPolicyDraft({ ...policyDraft, minContext: Math.max(0, Number(event.target.value)) })}
+                      />
+                    </Field>
+                    <label className="flex items-end gap-2 pb-2 text-xs text-muted">
+                      <input
+                        type="checkbox"
+                        className="size-3.5 accent-[#7c5cff]"
+                        checked={policyDraft.requireTools}
+                        onChange={(event) => setPolicyDraft({ ...policyDraft, requireTools: event.target.checked })}
+                      />
+                      Exigir soporte de tools
+                    </label>
+                    <div className="rounded-md border border-line-soft px-2.5 py-2 text-[11px] leading-5 text-faint">
+                      Sin sustituciones silenciosas: si el modelo no cumple la política, el lanzamiento falla.
+                    </div>
+                  </div>
+                </details>
               </div>
             )}
           </Section>

@@ -255,6 +255,7 @@ export interface SessionStats {
 export interface AnalyticsSummary {
   project_id: string;
   days: number;
+  source?: string;
   by_model: Array<{
     model: string;
     cost: string | number;
@@ -307,4 +308,80 @@ export interface SessionMessage {
   model?: ModelRef;
   time?: { created?: number; completed?: number };
   [key: string]: unknown;
+}
+
+export interface AgentCatalogEntry {
+  agentId: string;
+  role: string;
+  description: string;
+  required?: boolean;
+}
+
+export interface AgentSelection {
+  projectId: string;
+  mode: "auto" | "manual" | "hybrid";
+  selected: string[];
+  recommended: string[];
+  approved: string[];
+  rationale: Record<string, string>;
+  updatedAt: string;
+}
+
+export interface ExecutionRecord {
+  id: string;
+  projectId: string | null;
+  phase: number | null;
+  parentExecutionId: string | null;
+  profileId: string | null;
+  sessionId: string | null;
+  agentId: string | null;
+  providerId: string | null;
+  modelId: string | null;
+  role: string | null;
+  taskId: string | null;
+  planId: string | null;
+  mode: string | null;
+  selectionReason: string | null;
+  attempt: number;
+  tokensInput: number;
+  tokensOutput: number;
+  tokensReasoning: number;
+  tokensCacheRead: number;
+  tokensCacheWrite: number;
+  costUsd: number | null;
+  costSource: string | null;
+  status: string | null;
+  error: string | null;
+  gateRunId: string | null;
+  priceVersion: string | null;
+  toolVersions: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface BudgetRecord {
+  key: string;
+  projectId: string;
+  scope: string;
+  planId: string | null;
+  phase: number | null;
+  taskId: string | null;
+  maxTokens: number | null;
+  maxCostUsd: number | null;
+  reservedTokens: number;
+  reservedCostUsd: number;
+  spentTokens: number;
+  spentCostUsd: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ModelHistoryRecord {
+  providerId: string;
+  modelId: string;
+  runs: number;
+  successes: number;
+  avgCostUsd: number | null;
+  avgTokens: number | null;
 }

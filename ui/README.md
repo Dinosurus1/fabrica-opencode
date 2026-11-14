@@ -61,13 +61,13 @@ No publiques la consola en `0.0.0.0` sin poner delante autenticación y TLS.
 |---|---|
 | `/` | Estado general, sesiones, steps, coste, uso por modelo y actividad reciente. |
 | `/sessions` | Sesiones de OpenCode; abrir, cambiar agente/modelo, prompt e interrumpir. |
-| `/work` | Tareas, planes, gates y revisiones de PostgreSQL. |
-| `/agents` | Agentes, rol, modelo activo, modelo del perfil aplicado y reglas. |
-| `/models` | Catálogo real, perfiles de ejecución y asignación de modelo por rol. |
+| `/work` | Tareas, planes, gates, revisiones, presupuesto global y execution log. |
+| `/agents` | Selección de agentes por proyecto, modo manual/híbrido/auto y modelo activo. |
+| `/models` | Catálogo real, perfiles, política y asignación de modelo/presupuesto por rol. |
 | `/memory` | Memoria vectorial: auditoría, búsqueda textual, metadatos y borrado. |
 | `/projects` | Proyectos conocidos por OpenCode. |
 | `/skills` | Skills disponibles y su origen. |
-| `/analytics` | Coste, tokens, ejecuciones y tool success. |
+| `/analytics` | Coste, tokens, ejecuciones, tool success e historial por modelo/rol. |
 | `/settings` | Salud de la fábrica, proveedores, MCP y configuración en solo lectura. |
 
 ## Model & Agent Management
@@ -84,6 +84,16 @@ No publiques la consola en `0.0.0.0` sin poner delante autenticación y TLS.
 - **Separación**: cambiar el modelo no altera permisos, prompts ni skills.
 - **Default ≠ aplicado**: el perfil por defecto es el que se propone; el aplicado
   es el que está en uso en la location. La UI muestra ambos.
+- **Política editable**: proveedores/modelos permitidos, modelos prohibidos,
+  contexto mínimo y exigencia de tools.
+- **Presupuesto**: límites por asignación en Models y presupuesto global en Work;
+  la reserva real es atómica en `subtask_run`/`review_run`.
+- **Modos de modelo**: manual (modelo fijado por rol), auto (código + política +
+  historial) e híbrido (auto con aprobación en tareas sensibles o caras).
+- **Selección de agentes**: manual, híbrido o auto; se aplica a la sesión como
+  reglas `subagent`.
+- **Skills acotadas**: los agentes de la fábrica solo ven las skills permitidas
+  por sus reglas `skill` (factory-*, context7-mcp y documentos cuando aplica).
 
 ## Arquitectura
 

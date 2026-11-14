@@ -220,6 +220,97 @@ export const FactoryRpc = Rpc.define({
       },
       output: anyObject,
     },
+    "budgets.list": {
+      input: {
+        type: "object",
+        properties: { project_id: { type: "string" } },
+        additionalProperties: false,
+      },
+      output: anyObject,
+    },
+    "budgets.set": {
+      input: {
+        type: "object",
+        properties: {
+          scope: { type: "string", enum: ["global", "phase", "task"] },
+          project_id: { type: "string" },
+          plan_id: { type: "string" },
+          phase: { type: "integer", minimum: 0 },
+          task_id: { type: "string" },
+          max_tokens: { type: "integer", minimum: 0 },
+          max_cost_usd: { type: "number", minimum: 0 },
+          confirmed: { type: "boolean" },
+        },
+        required: ["scope"],
+        additionalProperties: false,
+      },
+      output: anyObject,
+    },
+    "executions.list": {
+      input: {
+        type: "object",
+        properties: {
+          project_id: { type: "string" },
+          agent_id: { type: "string" },
+          model_id: { type: "string" },
+          status: { type: "string" },
+          role: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 500 },
+          offset: { type: "integer", minimum: 0 },
+        },
+        additionalProperties: false,
+      },
+      output: anyObject,
+    },
+    "models.history": {
+      input: {
+        type: "object",
+        properties: { role: { type: "string" } },
+        required: ["role"],
+        additionalProperties: false,
+      },
+      output: anyObject,
+    },
+    "agents.selection.get": {
+      input: {
+        type: "object",
+        properties: { project_id: { type: "string" } },
+        additionalProperties: false,
+      },
+      output: anyObject,
+    },
+    "agents.propose": {
+      input: {
+        type: "object",
+        properties: {
+          ambiguous_scope: { type: "boolean" },
+          cross_module: { type: "boolean" },
+          phase_plan: { type: "boolean" },
+          handoff: { type: "boolean" },
+          research: { type: "boolean" },
+          second_opinion: { type: "boolean" },
+        },
+        additionalProperties: false,
+      },
+      output: anyObject,
+    },
+    "agents.selection.set": {
+      input: {
+        type: "object",
+        properties: {
+          project_id: { type: "string" },
+          mode: { type: "string", enum: ["auto", "manual", "hybrid"] },
+          selected: { type: "array", items: { type: "string" }, minItems: 1 },
+          recommended: { type: "array", items: { type: "string" } },
+          apply_session: { type: "boolean" },
+          session_id: { type: "string" },
+          confirmed: { type: "boolean" },
+        },
+        required: ["mode", "selected"],
+        additionalProperties: false,
+      },
+      output: anyObject,
+    },
     "analytics.summary": {
       input: {
         type: "object",

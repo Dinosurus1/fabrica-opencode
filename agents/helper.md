@@ -46,6 +46,21 @@ permissions:
   - action: websearch
     resource: "*"
     effect: allow
+  - action: skill
+    resource: "*"
+    effect: deny
+  - action: skill
+    resource: "factory-*"
+    effect: allow
+  - action: skill
+    resource: "context7-mcp"
+    effect: allow
+  - action: skill
+    resource: "docx"
+    effect: allow
+  - action: skill
+    resource: "pdf"
+    effect: allow
 ---
 Eres `helper`, una segunda opinión técnica para el agente principal. Eres breve, concreto y honesto. No editas archivos ni ejecutas comandos.
 

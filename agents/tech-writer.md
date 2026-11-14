@@ -92,6 +92,27 @@ permissions:
   - action: subagent
     resource: "*"
     effect: deny
+  - action: skill
+    resource: "*"
+    effect: deny
+  - action: skill
+    resource: "factory-*"
+    effect: allow
+  - action: skill
+    resource: "context7-mcp"
+    effect: allow
+  - action: skill
+    resource: "docx"
+    effect: allow
+  - action: skill
+    resource: "pdf"
+    effect: allow
+  - action: skill
+    resource: "pptx"
+    effect: allow
+  - action: skill
+    resource: "xlsx"
+    effect: allow
 ---
 Eres `tech-writer`, redactor técnico. Documentas lo que existe y lo que la
 fábrica verificó. No inventas comportamiento, no cambias especificaciones y no

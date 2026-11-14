@@ -14,6 +14,7 @@ import { accessSync, constants, existsSync, readdirSync, statSync } from "node:f
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FactoryDb, ProjectRef } from "./db.js";
+import type { MamRuntime } from "./mam.js";
 import type { PlanStore } from "./plan-db.js";
 import { redact, runCommand, shellQuote, tail } from "./exec.js";
 import { worktreeRoot } from "./paths.js";
@@ -21,6 +22,7 @@ import { ok, type ToolDef } from "./types.js";
 
 export interface DoctorDeps {
   db: FactoryDb;
+  mam?: MamRuntime;
   planStore?: PlanStore;
   resolveProject: (sessionID: string) => Promise<ProjectRef>;
   diagnostics: {
@@ -79,6 +81,15 @@ const EXPECTED_TOOLS = [
   "model_profile_delete",
   "model_profile_apply",
   "mam_status",
+  "budget_list",
+  "budget_set",
+  "executions_list",
+  "model_history",
+  "factory_agents_get",
+  "factory_agents_propose",
+  "factory_agents_select",
+  "factory_agents_apply",
+  "factory_agents_check",
   "factory_doctor",
 ];
 
@@ -168,6 +179,9 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
             "factory_profile_assignments",
             "factory_audit_events",
             "factory_execution_log",
+            "factory_budgets",
+            "factory_budget_reservations",
+            "factory_model_prices",
           ]) {
             try {
               const present = await deps.db.tableExists(table);
@@ -179,7 +193,7 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
           try {
             const version = await deps.db.getMeta("schema_version");
             const numeric = Number(version);
-            add("migración:schema_version", numeric === 6 ? "ok" : "error", `schema_version=${String(version ?? "desconocida")}; esperado 6`);
+            add("migración:schema_version", numeric === 7 ? "ok" : "error", `schema_version=${String(version ?? "desconocida")}; esperado 7`);
           } catch (error) {
             add("migración:schema_version", "error", error instanceof Error ? error.message : String(error));
           }
@@ -220,6 +234,14 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
             ["factory_execution_profiles", "is_default"],
             ["factory_profile_assignments", "locked"],
             ["factory_execution_log", "cost_usd"],
+            ["factory_execution_log", "project_id"],
+            ["factory_execution_log", "parent_execution_id"],
+            ["factory_execution_log", "selection_reason"],
+            ["factory_execution_log", "price_version"],
+            ["factory_budgets", "max_tokens"],
+            ["factory_budgets", "reserved_tokens"],
+            ["factory_budget_reservations", "status"],
+            ["factory_model_prices", "version"],
           ] as const) {
             try {
               const present = await deps.db.columnExists(table, column);
@@ -287,6 +309,29 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
             );
           } catch (error) {
             add("orquestación:worktrees", "warn", error instanceof Error ? error.message : String(error));
+          }
+        }
+
+        if (deps.mam) {
+          try {
+            const staleExecutions = await deps.mam.store.staleExecutions(90);
+            add(
+              "execution:abiertas",
+              staleExecutions.length > 0 ? "warn" : "ok",
+              staleExecutions.length > 0
+                ? `${staleExecutions.length} ejecución(es) running > 90 min; usa plan_resume o revisa el execution log`
+                : "sin ejecuciones abiertas",
+            );
+            const staleReservations = await deps.mam.store.staleReservations(90);
+            add(
+              "budget:reservas_abiertas",
+              staleReservations.length > 0 ? "warn" : "ok",
+              staleReservations.length > 0
+                ? `${staleReservations.length} reserva(s) sin liquidar > 90 min; revisa presupuestos`
+                : "sin reservas abiertas",
+            );
+          } catch (error) {
+            add("execution:diagnóstico", "warn", error instanceof Error ? error.message : String(error));
           }
         }
 

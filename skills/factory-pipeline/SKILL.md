@@ -144,7 +144,21 @@ product-analyst → architect → plan_create → implementer → run_gates
 - Ningún rol sustituye las compuertas, la revisión independiente ni
   `task_close`.
 
-## 6. Salida del orquestador
+## 6. Modos, presupuesto y evidencia de ejecución
+
+Hay dos modos distintos; no los mezcles:
+
+| Eje | Valores | Dónde vive | Quién decide |
+|---|---|---|---|
+| Selección de agentes | `manual`, `hybrid`, `auto` | `factory_meta` por proyecto | Usuario + recomendación determinística |
+| Modelo por rol | `manual`, `auto`, `hybrid` | Perfil MAM | Código (`selectModel`) y política |
+
+- **Agentes**: `factory_agents_get` → `factory_agents_propose` → `factory_agents_select` → `factory_agents_apply`. Antes de lanzar un subagente, `factory_agents_check`; si no está aprobado, pide permiso.
+- **Modelo**: `manual` usa el modelo asignado; `auto` elige con política, presupuesto e historial; `hybrid` exige `confirmed=true` en tareas sensibles, modelos más caros o reintentos.
+- **Presupuesto**: `budget_set` global/fase/tarea; `subtask_run`/`review_run` reservan antes de crear la sesión y liquidan al terminar. Si no hay saldo, no se lanza.
+- **Evidencia**: `executions_list` y `model_history` muestran agente, modelo, tokens, coste, estado, intento y motivo. La métrica es coste por tarea terminada correctamente.
+
+## 7. Salida del orquestador
 
 Cuando uses esta skill, deja claro en tu respuesta:
 

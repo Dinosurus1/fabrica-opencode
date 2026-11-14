@@ -39,13 +39,17 @@ Fábrica de software genérica para OpenCode V2. Instalación global en `~/.conf
 | `quality_policy_set` | Cambia la política de compuertas; exige `confirmed=true`. |
 | `model_catalog_sync` / `model_catalog_list` / `agent_catalog_list` | Catálogo MAM de modelos y agentes. |
 | `model_profile_*` / `mam_status` | Perfiles de ejecución, asignación de modelo por rol, validación, aplicación y resumen. |
+| `factory_agents_*` | Selección de agentes por proyecto, recomendación determinística y permisos `subagent` de la sesión. |
+| `budget_list` / `budget_set` | Presupuesto global, de fase y de tarea. |
+| `executions_list` / `model_history` | Execution log y evaluación de modelos por éxito/coste. |
 | `factory_doctor` | Diagnostica PostgreSQL, migraciones, escáneres, packs, modelos/agentes, plugin de memoria y tools. |
 
 Las tools de memoria (`memory_search`, `memory_save`, `memory_forget`, `memory_capture_now`, `memory_stats`) son las del plugin `opencode-memory` ya existente. No se duplican.
 
 El plugin también expone un RPC en `/api/rpc/opencode.factory/*` para la consola
 web: `health`, `models.*`, `agents.list`, `profiles.*`, `work.*`, `memory.*` y
-`analytics.summary`. Las mutaciones de perfiles exigen `confirmed=true` y se
+`analytics.summary`, `budgets.*`, `executions.list`, `models.history` y
+`agents.*`. Las mutaciones de perfiles/presupuestos exigen `confirmed=true` y se
 auditan; el perfil aplicado se guarda por location y se restaura al recargar.
 
 ## Skills
@@ -180,12 +184,15 @@ locales configurados por ese plugin). Solo añade:
 - `tasks.author_model`: modelo autor para elegir revisores de otra familia.
 - `factory_meta`: versión de esquema y perfil aplicado por location.
 - `factory_models`, `factory_agent_catalog`, `factory_execution_profiles`, `factory_profile_assignments`, `factory_audit_events`, `factory_execution_log`: MAM.
+- `factory_budgets`, `factory_budget_reservations`, `factory_model_prices`: presupuesto y precios.
 
 No modifica `memories` ni `capture_state`. Migraciones idempotentes:
 `plugins/factory/migrations/001_factory.sql`, `002_quality_gates.sql`,
 `003_usage.sql`, `004_orchestration.sql`, `005_review_severity.sql` y
-`006_model_agent_management.sql` (`schema_version=6`). La 006 añade catálogo
-MAM, perfiles, asignaciones, auditoría y registro de ejecución.
+`006_model_agent_management.sql` y `007_execution_budgets.sql`
+(`schema_version=7`). La 006 añade catálogo MAM, perfiles, asignaciones,
+auditoría y registro de ejecución; la 007 añade presupuestos, reservas atómicas
+y precios versionados.
 
 Se puede cambiar la base con `FACTORY_DATABASE_URL` o
 `OPENCODE_MEMORY_DATABASE_URL`; nunca se registra la URL completa.

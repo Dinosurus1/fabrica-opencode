@@ -153,7 +153,10 @@ export interface ModelFilter {
   limit?: number;
 }
 
-export interface ExecutionLogInput {
+export interface ExecutionStartInput {
+  projectId?: string | null;
+  phase?: number | null;
+  parentExecutionId?: string | null;
   profileId?: string | null;
   sessionId?: string | null;
   agentId?: string | null;
@@ -162,6 +165,17 @@ export interface ExecutionLogInput {
   role?: string | null;
   taskId?: string | null;
   planId?: string | null;
+  mode?: string | null;
+  selectionReason?: string | null;
+  attempt?: number;
+  toolVersions?: Record<string, unknown>;
+  gateRunId?: string | null;
+  priceVersion?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ExecutionFinishInput {
+  status: string;
   tokensInput?: number;
   tokensOutput?: number;
   tokensReasoning?: number;
@@ -169,10 +183,106 @@ export interface ExecutionLogInput {
   tokensCacheWrite?: number;
   costUsd?: number | null;
   costSource?: string | null;
-  status?: string | null;
   error?: string | null;
-  startedAt?: string | null;
-  finishedAt?: string | null;
+  gateRunId?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ExecutionRecord {
+  id: string;
+  projectId: string | null;
+  phase: number | null;
+  parentExecutionId: string | null;
+  profileId: string | null;
+  sessionId: string | null;
+  agentId: string | null;
+  providerId: string | null;
+  modelId: string | null;
+  role: string | null;
+  taskId: string | null;
+  planId: string | null;
+  mode: string | null;
+  selectionReason: string | null;
+  attempt: number;
+  tokensInput: number;
+  tokensOutput: number;
+  tokensReasoning: number;
+  tokensCacheRead: number;
+  tokensCacheWrite: number;
+  costUsd: number | null;
+  costSource: string | null;
+  status: string | null;
+  error: string | null;
+  gateRunId: string | null;
+  priceVersion: string | null;
+  toolVersions: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface ExecutionFilter {
+  projectId?: string;
+  agentId?: string;
+  modelId?: string;
+  status?: string;
+  role?: string;
+  taskId?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ModelHistoryRecord {
+  providerId: string;
+  modelId: string;
+  runs: number;
+  successes: number;
+  avgCostUsd: number | null;
+  avgTokens: number | null;
+}
+
+export interface BudgetRecord {
+  key: string;
+  projectId: string;
+  scope: string;
+  planId: string | null;
+  phase: number | null;
+  taskId: string | null;
+  maxTokens: number | null;
+  maxCostUsd: number | null;
+  reservedTokens: number;
+  reservedCostUsd: number;
+  spentTokens: number;
+  spentCostUsd: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BudgetInput {
+  scope: "global" | "phase" | "task";
+  projectId: string;
+  planId?: string | null;
+  phase?: number | null;
+  taskId?: string | null;
+  maxTokens?: number | null;
+  maxCostUsd?: number | null;
+}
+
+export interface BudgetReservationResult {
+  ok: boolean;
+  updated: number;
+  total: number;
+  inserted: number;
+}
+
+export interface AgentSelection {
+  projectId: string;
+  mode: "auto" | "manual" | "hybrid";
+  selected: string[];
+  recommended: string[];
+  approved: string[];
+  rationale: Record<string, string>;
+  updatedAt: string;
 }
 
 export interface MemoryRecord {
@@ -276,6 +386,65 @@ interface AgentRow {
   last_seen_at: Date | string;
   created_at: Date | string;
   updated_at: Date | string;
+}
+
+interface ExecutionRow {
+  id: string;
+  project_id: string | null;
+  phase: number | null;
+  parent_execution_id: string | null;
+  profile_id: string | null;
+  session_id: string | null;
+  agent_id: string | null;
+  provider_id: string | null;
+  model_id: string | null;
+  role: string | null;
+  task_id: string | null;
+  plan_id: string | null;
+  mode: string | null;
+  selection_reason: string | null;
+  attempt: number;
+  tokens_input: number | string;
+  tokens_output: number | string;
+  tokens_reasoning: number | string;
+  tokens_cache_read: number | string;
+  tokens_cache_write: number | string;
+  cost_usd: string | number | null;
+  cost_source: string | null;
+  status: string | null;
+  error: string | null;
+  gate_run_id: string | null;
+  price_version: string | null;
+  tool_versions: unknown;
+  metadata: unknown;
+  started_at: Date | string;
+  finished_at: Date | string | null;
+}
+
+interface BudgetRow {
+  key: string;
+  project_id: string;
+  scope: string;
+  plan_id: string | null;
+  phase: number | null;
+  task_id: string | null;
+  max_tokens: number | string | null;
+  max_cost_usd: string | number | null;
+  reserved_tokens: number | string;
+  reserved_cost_usd: string | number;
+  spent_tokens: number | string;
+  spent_cost_usd: string | number;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+interface HistoryRow {
+  provider_id: string;
+  model_id: string;
+  runs: number | string;
+  successes: number | string;
+  avg_cost: string | number | null;
+  avg_tokens: string | number | null;
 }
 
 const ISO = (value: Date | string | null): string | null =>
@@ -388,6 +557,68 @@ function mapMemoryRow(row: Record<string, unknown>): MemoryRecord {
   };
 }
 
+function mapExecution(row: ExecutionRow): ExecutionRecord {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    phase: row.phase,
+    parentExecutionId: row.parent_execution_id,
+    profileId: row.profile_id,
+    sessionId: row.session_id,
+    agentId: row.agent_id,
+    providerId: row.provider_id,
+    modelId: row.model_id,
+    role: row.role,
+    taskId: row.task_id,
+    planId: row.plan_id,
+    mode: row.mode,
+    selectionReason: row.selection_reason,
+    attempt: Number(row.attempt ?? 1),
+    tokensInput: Number(row.tokens_input ?? 0),
+    tokensOutput: Number(row.tokens_output ?? 0),
+    tokensReasoning: Number(row.tokens_reasoning ?? 0),
+    tokensCacheRead: Number(row.tokens_cache_read ?? 0),
+    tokensCacheWrite: Number(row.tokens_cache_write ?? 0),
+    costUsd: numberOrNull(row.cost_usd),
+    costSource: row.cost_source,
+    status: row.status,
+    error: row.error,
+    gateRunId: row.gate_run_id,
+    priceVersion: row.price_version,
+    toolVersions: asObject(row.tool_versions),
+    metadata: asObject(row.metadata),
+    startedAt: ISO(row.started_at) ?? "",
+    finishedAt: ISO(row.finished_at),
+  };
+}
+
+function mapBudget(row: BudgetRow): BudgetRecord {
+  return {
+    key: row.key,
+    projectId: row.project_id,
+    scope: row.scope,
+    planId: row.plan_id,
+    phase: row.phase,
+    taskId: row.task_id,
+    maxTokens: row.max_tokens === null ? null : Number(row.max_tokens),
+    maxCostUsd: numberOrNull(row.max_cost_usd),
+    reservedTokens: Number(row.reserved_tokens ?? 0),
+    reservedCostUsd: numberOrNull(row.reserved_cost_usd) ?? 0,
+    spentTokens: Number(row.spent_tokens ?? 0),
+    spentCostUsd: numberOrNull(row.spent_cost_usd) ?? 0,
+    createdAt: ISO(row.created_at) ?? "",
+    updatedAt: ISO(row.updated_at) ?? "",
+  };
+}
+
+export function budgetKey(input: BudgetInput): string {
+  if (input.scope === "global") return `global:${input.projectId}`;
+  if (input.scope === "phase") {
+    return `phase:${input.projectId}:${input.planId ?? "none"}:${input.phase ?? 0}`;
+  }
+  return `task:${input.projectId}:${input.taskId ?? "none"}`;
+}
+
 export class MamStore {
   constructor(private readonly query: QueryFn) {}
 
@@ -496,6 +727,23 @@ export class MamStore {
         [JSON.stringify(agentPayload)],
       );
     }
+
+    const priceVersion = new Date().toISOString().slice(0, 10);
+    await this.query(
+      `INSERT INTO factory_model_prices (
+         version, provider_id, model_id, input, output, cache_read, cache_write
+       )
+       SELECT $1, provider_id, model_id, cost_input, cost_output,
+              cost_cache_read, cost_cache_write
+       FROM factory_models
+       WHERE cost_input IS NOT NULL OR cost_output IS NOT NULL
+       ON CONFLICT (version, provider_id, model_id) DO UPDATE SET
+         input = EXCLUDED.input,
+         output = EXCLUDED.output,
+         cache_read = EXCLUDED.cache_read,
+         cache_write = EXCLUDED.cache_write`,
+      [priceVersion],
+    );
 
     return { models: modelPayload.length, agents: agentPayload.length };
   }
@@ -715,6 +963,24 @@ export class MamStore {
     return value?.profile_id ?? null;
   }
 
+  async getAgentSelection(projectId: string): Promise<AgentSelection | null> {
+    const result = await this.query<{ value: unknown }>(
+      `SELECT value FROM factory_meta WHERE key = $1`,
+      [`agent_selection:${projectId}`],
+    );
+    const value = result.rows[0]?.value as AgentSelection | undefined;
+    return value ?? null;
+  }
+
+  async setAgentSelection(selection: AgentSelection): Promise<void> {
+    await this.query(
+      `INSERT INTO factory_meta (key, value, updated_at)
+       VALUES ($1, $2::jsonb, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [`agent_selection:${selection.projectId}`, JSON.stringify(selection)],
+    );
+  }
+
   async ensureDefaultProfile(): Promise<ExecutionProfileWithAssignments | null> {
     const current = await this.getDefaultProfile();
     if (current) {
@@ -755,17 +1021,19 @@ export class MamStore {
     );
   }
 
-  async logExecution(input: ExecutionLogInput): Promise<void> {
-    await this.query(
+  async startExecution(input: ExecutionStartInput): Promise<string> {
+    const result = await this.query<{ id: string }>(
       `INSERT INTO factory_execution_log (
-         profile_id, session_id, agent_id, provider_id, model_id, role,
-         task_id, plan_id, tokens_input, tokens_output, tokens_reasoning,
-         tokens_cache_read, tokens_cache_write, cost_usd, cost_source,
-         status, error, started_at, finished_at
+         project_id, phase, parent_execution_id, profile_id, session_id, agent_id,
+         provider_id, model_id, role, task_id, plan_id, mode, selection_reason,
+         attempt, tool_versions, gate_run_id, price_version, metadata, status, started_at
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-               COALESCE($18::timestamptz, now()), $19::timestamptz)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'running',now())
+       RETURNING id`,
       [
+        input.projectId ?? null,
+        input.phase ?? null,
+        input.parentExecutionId ?? null,
         input.profileId ?? null,
         input.sessionId ?? null,
         input.agentId ?? null,
@@ -774,6 +1042,37 @@ export class MamStore {
         input.role ?? null,
         input.taskId ?? null,
         input.planId ?? null,
+        input.mode ?? null,
+        input.selectionReason ?? null,
+        input.attempt ?? 1,
+        JSON.stringify(input.toolVersions ?? {}),
+        input.gateRunId ?? null,
+        input.priceVersion ?? null,
+        JSON.stringify(input.metadata ?? {}),
+      ],
+    );
+    return result.rows[0]!.id;
+  }
+
+  async finishExecution(id: string, input: ExecutionFinishInput): Promise<void> {
+    await this.query(
+      `UPDATE factory_execution_log SET
+         status = $2,
+         tokens_input = $3,
+         tokens_output = $4,
+         tokens_reasoning = $5,
+         tokens_cache_read = $6,
+         tokens_cache_write = $7,
+         cost_usd = $8,
+         cost_source = $9,
+         error = $10,
+         gate_run_id = COALESCE($11, gate_run_id),
+         metadata = metadata || $12::jsonb,
+         finished_at = now()
+       WHERE id = $1`,
+      [
+        id,
+        input.status,
         input.tokensInput ?? 0,
         input.tokensOutput ?? 0,
         input.tokensReasoning ?? 0,
@@ -781,12 +1080,308 @@ export class MamStore {
         input.tokensCacheWrite ?? 0,
         input.costUsd ?? null,
         input.costSource ?? null,
-        input.status ?? null,
         input.error ?? null,
-        input.startedAt ?? null,
-        input.finishedAt ?? null,
+        input.gateRunId ?? null,
+        JSON.stringify(input.metadata ?? {}),
       ],
     );
+  }
+
+  async setExecutionSession(id: string, sessionId: string): Promise<void> {
+    await this.query(
+      `UPDATE factory_execution_log SET session_id = $2 WHERE id = $1`,
+      [id, sessionId],
+    );
+  }
+
+  async listExecutions(filter: ExecutionFilter = {}): Promise<ExecutionRecord[]> {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    const add = (sql: string, value: unknown) => {
+      params.push(value);
+      conditions.push(sql.replace("?", `$${params.length}`));
+    };
+    if (filter.projectId) add("project_id = ?", filter.projectId);
+    if (filter.agentId) add("agent_id = ?", filter.agentId);
+    if (filter.modelId) add("model_id = ?", filter.modelId);
+    if (filter.status) add("status = ?", filter.status);
+    if (filter.role) add("role = ?", filter.role);
+    if (filter.taskId) add("task_id = ?", filter.taskId);
+    const limit = Math.min(Math.max(filter.limit ?? 100, 1), 500);
+    const offset = Math.max(filter.offset ?? 0, 0);
+    params.push(limit, offset);
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const result = await this.query<ExecutionRow>(
+      `SELECT * FROM factory_execution_log ${where}
+       ORDER BY started_at DESC
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params,
+    );
+    return result.rows.map(mapExecution);
+  }
+
+  async modelHistory(role: string): Promise<ModelHistoryRecord[]> {
+    const result = await this.query<HistoryRow>(
+      `SELECT provider_id, model_id,
+              count(*)::int AS runs,
+              count(*) FILTER (WHERE status = 'done')::int AS successes,
+              avg(cost_usd)::numeric AS avg_cost,
+              avg(tokens_input + tokens_output)::numeric AS avg_tokens
+       FROM factory_execution_log
+       WHERE role = $1 AND status IN ('done', 'failed', 'budget_exceeded', 'escalated')
+       GROUP BY provider_id, model_id
+       ORDER BY runs DESC`,
+      [role],
+    );
+    return result.rows.map((row) => ({
+      providerId: row.provider_id,
+      modelId: row.model_id,
+      runs: Number(row.runs ?? 0),
+      successes: Number(row.successes ?? 0),
+      avgCostUsd: numberOrNull(row.avg_cost),
+      avgTokens: numberOrNull(row.avg_tokens),
+    }));
+  }
+
+  async priceVersion(): Promise<string | null> {
+    const result = await this.query<{ version: string }>(
+      `SELECT version FROM factory_model_prices ORDER BY version DESC LIMIT 1`,
+    );
+    return result.rows[0]?.version ?? null;
+  }
+
+  async modelPrice(
+    providerId: string,
+    modelId: string,
+    version?: string | null,
+  ): Promise<{ input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null } | null> {
+    const resolvedVersion = version ?? (await this.priceVersion());
+    if (!resolvedVersion) return null;
+    const result = await this.query<{
+      input: string | number | null;
+      output: string | number | null;
+      cache_read: string | number | null;
+      cache_write: string | number | null;
+    }>(
+      `SELECT input, output, cache_read, cache_write
+       FROM factory_model_prices
+       WHERE version = $1 AND provider_id = $2 AND model_id = $3`,
+      [resolvedVersion, providerId, modelId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      input: numberOrNull(row.input),
+      output: numberOrNull(row.output),
+      cacheRead: numberOrNull(row.cache_read),
+      cacheWrite: numberOrNull(row.cache_write),
+    };
+  }
+
+  async ensureBudget(input: BudgetInput): Promise<BudgetRecord> {
+    const key = budgetKey(input);
+    await this.query(
+      `INSERT INTO factory_budgets (key, project_id, scope, plan_id, phase, task_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (key) DO NOTHING`,
+      [
+        key,
+        input.projectId,
+        input.scope,
+        input.planId ?? null,
+        input.phase ?? null,
+        input.taskId ?? null,
+      ],
+    );
+    const result = await this.query<BudgetRow>(
+      `SELECT * FROM factory_budgets WHERE key = $1`,
+      [key],
+    );
+    return mapBudget(result.rows[0]!);
+  }
+
+  async setBudget(input: BudgetInput): Promise<BudgetRecord> {
+    const key = budgetKey(input);
+    const result = await this.query<BudgetRow>(
+      `INSERT INTO factory_budgets (
+         key, project_id, scope, plan_id, phase, task_id, max_tokens, max_cost_usd
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (key) DO UPDATE SET
+         max_tokens = EXCLUDED.max_tokens,
+         max_cost_usd = EXCLUDED.max_cost_usd,
+         updated_at = now()
+       RETURNING *`,
+      [
+        key,
+        input.projectId,
+        input.scope,
+        input.planId ?? null,
+        input.phase ?? null,
+        input.taskId ?? null,
+        input.maxTokens ?? null,
+        input.maxCostUsd ?? null,
+      ],
+    );
+    return mapBudget(result.rows[0]!);
+  }
+
+  async listBudgets(projectId: string): Promise<BudgetRecord[]> {
+    const result = await this.query<BudgetRow>(
+      `SELECT * FROM factory_budgets WHERE project_id = $1
+       ORDER BY scope, phase NULLS FIRST, task_id NULLS FIRST`,
+      [projectId],
+    );
+    return result.rows.map(mapBudget);
+  }
+
+  async reserveBudget(input: {
+    executionId: string;
+    keys: string[];
+    tokens: number;
+    costUsd: number;
+  }): Promise<BudgetReservationResult> {
+    const keys = [...new Set(input.keys.filter(Boolean))];
+    if (keys.length === 0) {
+      return { ok: true, updated: 0, total: 0, inserted: 0 };
+    }
+    const result = await this.query<{
+      updated: number;
+      inserted: number;
+      total: number;
+    }>(
+      `WITH keys AS (
+         SELECT unnest($1::text[]) AS key
+       ),
+       current AS (
+         SELECT b.key,
+                (b.max_tokens IS NULL OR b.reserved_tokens + b.spent_tokens + $2::bigint <= b.max_tokens) AS tokens_ok,
+                (b.max_cost_usd IS NULL OR b.reserved_cost_usd + b.spent_cost_usd + $3::numeric <= b.max_cost_usd) AS cost_ok
+         FROM factory_budgets b
+         JOIN keys k ON k.key = b.key
+         FOR UPDATE
+       ),
+       allowed AS (
+         SELECT COALESCE(bool_and(tokens_ok AND cost_ok), false) AS ok,
+                count(*)::int AS found
+         FROM current
+       ),
+       updated AS (
+         UPDATE factory_budgets b
+         SET reserved_tokens = b.reserved_tokens + $2::bigint,
+             reserved_cost_usd = b.reserved_cost_usd + $3::numeric,
+             updated_at = now()
+         FROM current c, allowed a
+         WHERE b.key = c.key
+           AND a.ok
+           AND a.found = (SELECT count(*) FROM keys)
+         RETURNING b.key
+       ),
+       inserted AS (
+         INSERT INTO factory_budget_reservations (
+           execution_id, budget_key, reserved_tokens, reserved_cost_usd
+         )
+         SELECT $4::uuid, key, $2::bigint, $3::numeric FROM updated
+         RETURNING budget_key
+       )
+       SELECT (SELECT count(*) FROM updated)::int AS updated,
+              (SELECT count(*) FROM inserted)::int AS inserted,
+              (SELECT count(*) FROM keys)::int AS total`,
+      [keys, Math.max(0, Math.round(input.tokens)), Math.max(0, input.costUsd), input.executionId],
+    );
+    const row = result.rows[0]!;
+    return {
+      ok: Number(row.updated) === Number(row.total) && Number(row.total) > 0,
+      updated: Number(row.updated),
+      total: Number(row.total),
+      inserted: Number(row.inserted),
+    };
+  }
+
+  async settleBudget(executionId: string, tokens: number, costUsd: number): Promise<void> {
+    await this.query(
+      `WITH reservations AS (
+         SELECT * FROM factory_budget_reservations
+         WHERE execution_id = $1 AND status = 'reserved'
+         FOR UPDATE
+       ),
+       budgets AS (
+         UPDATE factory_budgets b
+         SET reserved_tokens = GREATEST(0, b.reserved_tokens - r.reserved_tokens),
+             reserved_cost_usd = GREATEST(0, b.reserved_cost_usd - r.reserved_cost_usd),
+             spent_tokens = b.spent_tokens + $2::bigint,
+             spent_cost_usd = b.spent_cost_usd + $3::numeric,
+             updated_at = now()
+         FROM reservations r
+         WHERE b.key = r.budget_key
+         RETURNING b.key
+       ),
+       settled AS (
+         UPDATE factory_budget_reservations
+         SET status = 'settled',
+             settled_tokens = $2::bigint,
+             settled_cost_usd = $3::numeric,
+             settled_at = now()
+         WHERE execution_id = $1 AND status = 'reserved'
+         RETURNING id
+       )
+       SELECT (SELECT count(*) FROM budgets)::int AS budgets,
+              (SELECT count(*) FROM settled)::int AS settled`,
+      [executionId, Math.max(0, Math.round(tokens)), Math.max(0, costUsd)],
+    );
+  }
+
+  async releaseBudget(executionId: string): Promise<void> {
+    await this.query(
+      `WITH reservations AS (
+         SELECT * FROM factory_budget_reservations
+         WHERE execution_id = $1 AND status = 'reserved'
+         FOR UPDATE
+       ),
+       budgets AS (
+         UPDATE factory_budgets b
+         SET reserved_tokens = GREATEST(0, b.reserved_tokens - r.reserved_tokens),
+             reserved_cost_usd = GREATEST(0, b.reserved_cost_usd - r.reserved_cost_usd),
+             updated_at = now()
+         FROM reservations r
+         WHERE b.key = r.budget_key
+         RETURNING b.key
+       ),
+       released AS (
+         UPDATE factory_budget_reservations
+         SET status = 'released', settled_at = now()
+         WHERE execution_id = $1 AND status = 'reserved'
+         RETURNING id
+       )
+       SELECT (SELECT count(*) FROM budgets)::int AS budgets,
+              (SELECT count(*) FROM released)::int AS released`,
+      [executionId],
+    );
+  }
+
+  async staleExecutions(minutes = 90): Promise<ExecutionRecord[]> {
+    const result = await this.query<ExecutionRow>(
+      `SELECT * FROM factory_execution_log
+       WHERE status = 'running'
+         AND started_at < now() - ($1::int || ' minutes')::interval
+       ORDER BY started_at`,
+      [Math.max(1, Math.round(minutes))],
+    );
+    return result.rows.map(mapExecution);
+  }
+
+  async staleReservations(minutes = 90): Promise<Array<Record<string, unknown>>> {
+    const result = await this.query<Record<string, unknown>>(
+      `SELECT id, execution_id, budget_key, reserved_tokens, reserved_cost_usd, created_at
+       FROM factory_budget_reservations
+       WHERE status = 'reserved'
+         AND created_at < now() - ($1::int || ' minutes')::interval
+       ORDER BY created_at`,
+      [Math.max(1, Math.round(minutes))],
+    );
+    return result.rows.map((row) => Object.fromEntries(
+      Object.entries(row).map(([key, value]) => [key, value instanceof Date ? value.toISOString() : value]),
+    ));
   }
 
   async listMemories(filter: MemoryFilter = {}): Promise<MemoryRecord[]> {

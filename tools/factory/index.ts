@@ -7,6 +7,8 @@
  * Qué accede: nada por sí mismo; cada tool declara sus propios accesos.
  */
 
+import { createAgentSelectionTools } from "./agents.js";
+import { createBudgetTools } from "./budgets.js";
 import { createChecksTools } from "./checks.js";
 import { createDoctorTools, type DoctorDeps } from "./doctor.js";
 import { createGatesTools } from "./gates.js";
@@ -58,6 +60,8 @@ export function createFactoryTools(deps: FactoryToolDeps): ToolDef[] {
     ...createChecksTools(deps),
     ...createSecurityTools(deps),
     ...createMamTools({ mam: deps.mam }),
+    ...createBudgetTools({ mam: deps.mam, resolveProject: deps.resolveProject }),
+    ...createAgentSelectionTools({ mam: deps.mam, resolveProject: deps.resolveProject }),
     ...createGitTools(deps),
     ...createGatesTools(deps),
     ...createReviewTools({ ...deps, ...deps.usage }),

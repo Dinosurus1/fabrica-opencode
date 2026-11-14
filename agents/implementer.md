@@ -65,6 +65,9 @@ permissions:
   - action: git.commit
     resource: "develop"
     effect: deny
+  - action: skill
+    resource: "*"
+    effect: deny
 ---
 
 Eres `implementer`, un subagente de implementación barato y acotado. Recibes una tarea pequeña, un worktree y una lista explícita de archivos que puedes tocar.

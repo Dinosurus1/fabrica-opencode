@@ -111,6 +111,9 @@ Condiciones:
    hizo.
 3. **Coste justificado.** Para una tarea trivial no se activa un rol adicional.
    Si el rol no aporta un artefacto que cambie la decisión, se omite.
+4. **Skills acotadas.** Cada agente declara qué skills puede cargar con reglas
+   `skill` de sus permisos. Las skills que no aportan a su rol no se listan ni
+   gastan contexto.
 
 ## 7. Evidencia de finalización
 
@@ -149,7 +152,19 @@ Tres niveles: proyecto, fase y agente. Distribución ilustrativa, no universal:
 - Se reutilizan análisis y resultados deterministas si el código no cambió.
 - La métrica clave es **coste de entregar una funcionalidad correctamente
   terminada**, no coste por petición.
-- Los costes reales salen de `task_close` y `phase_close`; no se rellenan a mano.
+- Los costes reales salen de `task_close`, `phase_close` y del execution log; no
+  se rellenan a mano.
+- **Modos de modelo:** `manual` usa el modelo asignado por rol; `auto` elige en
+  código con política, factibilidad, presupuesto e historial; `hybrid` es auto con
+  aprobación en tareas sensibles, modelos más caros o reintentos. El LLM solo
+  clasifica la dificultad.
+- **Reserva atómica:** `subtask_run`/`review_run` reservan tokens/coste en
+  global, fase y tarea antes de crear la sesión, y liquidan el uso real al
+  terminar. Si la reserva no cabe, no se lanza. En proveedores de tarifa plana o
+  gratuitos, `max_tokens` es el límite principal.
+- **Execution log:** cada ejecución deja una fila al empezar y otra al terminar,
+  con agente, modelo, modo, motivo de selección, tokens, coste, estado, intento,
+  error, versiones y gate. Alimenta la evaluación de modelos y el coste por tarea.
 
 ## 9. Aprobación humana
 

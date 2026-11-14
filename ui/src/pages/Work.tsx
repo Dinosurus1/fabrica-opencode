@@ -1,12 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
-import { Activity, ListChecks, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
-import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Activity, ListChecks, RefreshCw, ShieldAlert, Wallet, XCircle } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useProject } from "../components/ProjectContext";
 import {
   Badge,
   Button,
   EmptyState,
   ErrorState,
+  Field,
   Modal,
   PageHeader,
   ProgressBar,
@@ -15,17 +16,21 @@ import {
   StatCard,
   Tabs,
 } from "../components/ui";
-import { cn, formatDate, formatUsd, percent, statusClass } from "../lib/format";
+import { cn, formatCompact, formatDate, formatUsd, percent, statusClass } from "../lib/format";
 import { rpc } from "../lib/rpc";
-import type { WorkGate, WorkOverview, WorkPlan, WorkReview, WorkTask } from "../lib/types";
+import type { BudgetRecord, ExecutionRecord, WorkGate, WorkOverview, WorkPlan, WorkReview, WorkTask } from "../lib/types";
 
-type WorkTab = "tasks" | "plans" | "gates" | "reviews";
+type WorkTab = "tasks" | "plans" | "gates" | "reviews" | "runs";
 
 export function WorkPage() {
   const { projectId, project } = useProject();
   const directory = project?.canonical;
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<WorkTab>("tasks");
   const [planId, setPlanId] = useState<string | null>(null);
+  const [budgetTokens, setBudgetTokens] = useState<number | "">("");
+  const [budgetCost, setBudgetCost] = useState<number | "">("");
+  const [budgetNotice, setBudgetNotice] = useState<string | null>(null);
 
   const overview = useQuery({
     queryKey: ["factory", "work-overview", projectId],
@@ -57,7 +62,51 @@ export function WorkPage() {
     queryFn: () => rpc<Record<string, unknown>>("work.plan", { project_id: projectId, plan_id: planId }, directory),
     enabled: Boolean(planId),
   });
+  const executions = useQuery({
+    queryKey: ["factory", "executions", projectId],
+    queryFn: () =>
+      rpc<{ count: number; executions: ExecutionRecord[] }>(
+        "executions.list",
+        { project_id: projectId, limit: 150 },
+        directory,
+      ),
+    enabled: Boolean(projectId),
+  });
+  const budgets = useQuery({
+    queryKey: ["factory", "budgets", projectId],
+    queryFn: () =>
+      rpc<{ count: number; budgets: BudgetRecord[] }>("budgets.list", { project_id: projectId }, directory),
+    enabled: Boolean(projectId),
+  });
 
+  useEffect(() => {
+    const globalBudget = budgets.data?.budgets.find((budget) => budget.scope === "global");
+    if (!globalBudget) return;
+    setBudgetTokens(globalBudget.maxTokens ?? "");
+    setBudgetCost(globalBudget.maxCostUsd ?? "");
+  }, [budgets.data]);
+
+  const saveBudget = useMutation({
+    mutationFn: () =>
+      rpc<{ saved: boolean; budget: BudgetRecord }>(
+        "budgets.set",
+        {
+          scope: "global",
+          project_id: projectId,
+          max_tokens: budgetTokens === "" ? undefined : Number(budgetTokens),
+          max_cost_usd: budgetCost === "" ? undefined : Number(budgetCost),
+          confirmed: true,
+        },
+        directory,
+      ),
+    onSuccess: async () => {
+      setBudgetNotice("Presupuesto global guardado.");
+      await queryClient.invalidateQueries({ queryKey: ["factory", "budgets", projectId] });
+    },
+    onError: (error) => setBudgetNotice(error instanceof Error ? error.message : String(error)),
+  });
+
+  const globalBudget = budgets.data?.budgets.find((budget) => budget.scope === "global");
   const openTasks =
     (overview.data?.tasks.pending ?? 0) +
     (overview.data?.tasks.in_progress ?? 0) +
@@ -118,6 +167,55 @@ export function WorkPage() {
         />
       </div>
 
+      <Section
+        title="Presupuesto"
+        description="Reserva atómica por ejecución. Los presupuestos de fase y tarea se crean al lanzar tareas."
+        actions={<Badge tone="violet"><Wallet size={12} /> global</Badge>}
+      >
+        <div className="grid gap-3 p-4 md:grid-cols-4">
+          <Field label="Máx. tokens global">
+            <input
+              type="number"
+              min={0}
+              step={100000}
+              className="field"
+              value={budgetTokens}
+              placeholder="Sin límite"
+              onChange={(event) => setBudgetTokens(event.target.value === "" ? "" : Number(event.target.value))}
+            />
+          </Field>
+          <Field label="Máx. coste USD global">
+            <input
+              type="number"
+              min={0}
+              step={0.5}
+              className="field"
+              value={budgetCost}
+              placeholder="Sin límite"
+              onChange={(event) => setBudgetCost(event.target.value === "" ? "" : Number(event.target.value))}
+            />
+          </Field>
+          <div className="rounded-lg border border-line-soft bg-carbon-950/50 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-[0.08em] text-faint">Reservado</div>
+            <div className="mt-1 text-sm text-ink">
+              {formatCompact(globalBudget?.reservedTokens ?? 0)} tok · {formatUsd(globalBudget?.reservedCostUsd ?? 0)}
+            </div>
+          </div>
+          <div className="rounded-lg border border-line-soft bg-carbon-950/50 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-[0.08em] text-faint">Gastado</div>
+            <div className="mt-1 text-sm text-ink">
+              {formatCompact(globalBudget?.spentTokens ?? 0)} tok · {formatUsd(globalBudget?.spentCostUsd ?? 0)}
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border-t border-line-soft px-4 py-3">
+          <Button onClick={() => saveBudget.mutate()} disabled={saveBudget.isPending}>
+            <Wallet size={14} /> Guardar presupuesto global
+          </Button>
+          {budgetNotice ? <span className="text-[11px] text-muted">{budgetNotice}</span> : null}
+        </div>
+      </Section>
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Tabs
           value={tab}
@@ -127,6 +225,7 @@ export function WorkPage() {
             { value: "plans", label: "Plans", count: plans.data?.count },
             { value: "gates", label: "Gates", count: gates.data?.count },
             { value: "reviews", label: "Reviews", count: reviews.data?.count },
+            { value: "runs", label: "Runs", count: executions.data?.count },
           ]}
         />
       </div>
@@ -246,6 +345,74 @@ export function WorkPage() {
         </Section>
       ) : null}
 
+      {tab === "runs" ? (
+        <Section
+          title="Runs"
+          description="Execution log: agente, modelo, tokens, coste, estado, intento y motivo de selección."
+        >
+          {executions.isLoading ? (
+            <Loading />
+          ) : executions.isError ? (
+            <ErrorState error={executions.error} onRetry={() => void executions.refetch()} />
+          ) : (executions.data?.executions.length ?? 0) === 0 ? (
+            <EmptyState
+              icon={<Activity size={26} />}
+              title="Sin ejecuciones registradas"
+              description="Las ejecuciones de subtask_run y review_run aparecerán aquí con su coste y modelo."
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-left">
+                <thead className="bg-carbon-850">
+                  <tr>
+                    <th className="table-head px-4 py-2.5">Inicio</th>
+                    <th className="table-head px-4 py-2.5">Agente</th>
+                    <th className="table-head px-4 py-2.5">Rol</th>
+                    <th className="table-head px-4 py-2.5">Modelo</th>
+                    <th className="table-head px-4 py-2.5">Estado</th>
+                    <th className="table-head px-4 py-2.5">Tokens</th>
+                    <th className="table-head px-4 py-2.5">Coste</th>
+                    <th className="table-head px-4 py-2.5">Duración</th>
+                    <th className="table-head px-4 py-2.5">Motivo / error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {executions.data!.executions.map((execution) => (
+                    <tr key={execution.id} className="table-row">
+                      <td className="px-4 py-2.5 text-[11px] text-muted">{formatDate(execution.startedAt)}</td>
+                      <td className="px-4 py-2.5 text-[11px] font-medium text-ink">{execution.agentId ?? "—"}</td>
+                      <td className="px-4 py-2.5 text-[11px] text-muted">{execution.role ?? "—"}</td>
+                      <td className="px-4 py-2.5 font-mono text-[10px] text-muted">
+                        {execution.providerId && execution.modelId
+                          ? `${execution.providerId}/${execution.modelId}`
+                          : "—"}
+                      </td>
+                      <td className="px-4 py-2.5"><StatusBadge value={execution.status ?? "—"} /></td>
+                      <td className="px-4 py-2.5 text-[11px] text-muted">
+                        {formatCompact(
+                          execution.tokensInput +
+                            execution.tokensOutput +
+                            execution.tokensReasoning +
+                            execution.tokensCacheRead +
+                            execution.tokensCacheWrite,
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-[11px] text-muted">{formatUsd(execution.costUsd)}</td>
+                      <td className="px-4 py-2.5 text-[11px] text-muted">
+                        {duration(execution.startedAt, execution.finishedAt)}
+                      </td>
+                      <td className="max-w-[320px] px-4 py-2.5 text-[11px] text-muted">
+                        <span className="line-clamp-2">{execution.error ?? execution.selectionReason ?? "—"}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Section>
+      ) : null}
+
       <Modal
         open={Boolean(planId)}
         title={String((plan.data?.plan as Record<string, unknown> | undefined)?.title ?? "Plan")}
@@ -332,4 +499,15 @@ function Detail({ label, value }: { label: string; value: string }) {
       <div className="mt-0.5 text-xs text-ink">{value}</div>
     </div>
   );
+}
+
+function duration(startedAt: string, finishedAt: string | null): string {
+  if (!finishedAt) return "en curso";
+  const start = new Date(startedAt).getTime();
+  const end = new Date(finishedAt).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return "—";
+  const seconds = Math.round((end - start) / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${seconds % 60}s`;
 }

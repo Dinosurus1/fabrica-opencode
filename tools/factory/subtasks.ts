@@ -14,10 +14,21 @@
 
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import type { FactoryDb, FactoryProfile, ProjectRef } from "./db.js";
+import type { FactoryDb, FactoryProfile, ProjectRef, ReviewUsage } from "./db.js";
 import type { PlanStore, PlanTaskRecord, PlanRecord } from "./plan-db.js";
+import type { MamRuntime } from "./mam.js";
 import { isSensitiveTask, filesOutsideOwned, isSafeBranchName, matchesGlob, slugify, worktreeRoot } from "./paths.js";
 import { routeReviewMap, sameFamily } from "./routing.js";
+import {
+  estimateReserveCost,
+  estimateReserveTokens,
+  releaseExecution,
+  reserveExecution,
+  settleExecution,
+  toolVersions,
+  usageTotals,
+} from "./budget.js";
+import { activeMode, selectModel, type WorkMode } from "./model-selection.js";
 import { runCommand, shellQuote, tail } from "./exec.js";
 import { captureUsage, emptyUsage, type SessionUsageSnapshot, type UsageDeps } from "./usage.js";
 import { fail, ok, type ToolDef } from "./types.js";
@@ -25,6 +36,7 @@ import { fail, ok, type ToolDef } from "./types.js";
 export interface SubtaskToolsDeps {
   db: FactoryDb;
   planStore: PlanStore;
+  mam: MamRuntime;
   resolveProject: (sessionID: string) => Promise<ProjectRef>;
   permission: { assert: (input: Record<string, unknown>) => Promise<void> };
   usage: UsageDeps;
@@ -259,15 +271,50 @@ async function runOne(
   task: PlanTaskRecord,
   context: { sessionID: string; agent: string; messageID: string; id: string },
   timeoutMinutes: number,
+  mode: WorkMode,
+  confirmed: boolean,
+  parentExecutionId: string | null = null,
 ): Promise<Record<string, unknown>> {
-  const prepared = await getWorktree(deps, project, profile, plan, task, context);
+  const attempts = task.attempts + 1;
+  let selection;
+  try {
+    selection = await selectModel({
+      mam: deps.mam,
+      projectId: project.projectId,
+      planId: plan.id,
+      task,
+      role: "implementer",
+      mode,
+      agentId: "implementer",
+      confirmed,
+      attempt: attempts,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await deps.planStore.updatePlanTask(plan.id, task.id, {
+      status: "blocked",
+      lastError: message,
+      finishedAt: new Date().toISOString(),
+    });
+    return { task_id: task.id, status: "blocked", error: message };
+  }
+  if (selection.requiresApproval) {
+    return {
+      task_id: task.id,
+      status: "needs_approval",
+      proposed_model: selection.model,
+      reason: selection.reason,
+      message: "El modo híbrido requiere aprobación antes de lanzar esta tarea.",
+    };
+  }
+  const effectiveTask = { ...task, model: selection.model };
+  const prepared = await getWorktree(deps, project, profile, plan, effectiveTask, context);
   if ("error" in prepared) {
     await deps.planStore.updatePlanTask(plan.id, task.id, { status: "failed", lastError: prepared.error, finishedAt: new Date().toISOString() });
     return { task_id: task.id, status: "failed", error: prepared.error };
   }
   const { worktree, branch } = prepared;
-  const attempts = task.attempts + 1;
-  const route = routeReviewMap(task.model);
+  const route = routeReviewMap(effectiveTask.model);
   let taskRow = task.taskId ? await deps.db.getTask(project.projectId, task.taskId) : null;
   if (!taskRow) {
     taskRow = await deps.db.createTask({
@@ -279,7 +326,7 @@ async function runOne(
       result: null,
     });
   }
-  await deps.db.setTaskAuthorModel(project.projectId, taskRow.id, task.model);
+  await deps.db.setTaskAuthorModel(project.projectId, taskRow.id, effectiveTask.model);
   await deps.planStore.updatePlanTask(plan.id, task.id, {
     taskId: taskRow.id,
     worktree,
@@ -288,6 +335,7 @@ async function runOne(
     status: "running",
     startedAt: new Date().toISOString(),
     reviewRoute: route,
+    model: effectiveTask.model,
     lastError: null,
   });
   const run = await deps.planStore.createSubtaskRun({
@@ -297,12 +345,134 @@ async function runOne(
     sessionId: null,
     worktree,
     branch,
-    model: task.model,
+    model: effectiveTask.model,
     status: "running",
     summary: null,
     result: {},
     usage: emptyUsage(null),
   });
+
+  const reserveTokens = estimateReserveTokens(task.difficulty, selection.maxTokens);
+  const reserveCost = await estimateReserveCost(
+    deps.mam.store,
+    selection.providerId,
+    selection.modelId,
+    reserveTokens,
+    selection.maxCostUsd,
+  );
+  let executionId: string;
+  try {
+    executionId = await deps.mam.store.startExecution({
+      projectId: project.projectId,
+      phase: task.phase,
+      parentExecutionId,
+      profileId: selection.profileId,
+      agentId: "implementer",
+      providerId: selection.providerId,
+      modelId: selection.modelId,
+      role: "implementer",
+      taskId: taskRow.id,
+      planId: plan.id,
+      mode,
+      selectionReason: selection.reason,
+      attempt: attempts,
+      toolVersions: toolVersions(deps.runtime),
+      priceVersion: await deps.mam.store.priceVersion(),
+      metadata: {
+        difficulty: task.difficulty,
+        risk_flags: task.riskFlags,
+        plan_task_id: task.id,
+        reserved_tokens: reserveTokens,
+        reserved_cost_usd: reserveCost,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await deps.planStore.updateSubtaskRun(run.id, {
+      status: "failed",
+      summary: `No se pudo abrir el execution log: ${message}`,
+      result: { error: message },
+      usage: emptyUsage(null),
+      finishedAt: new Date().toISOString(),
+    }).catch(() => undefined);
+    await deps.planStore.updatePlanTask(plan.id, task.id, {
+      status: "failed",
+      lastError: message,
+      finishedAt: new Date().toISOString(),
+    }).catch(() => undefined);
+    return { task_id: task.id, status: "failed", error: message };
+  }
+
+  let budgetReserved = false;
+  let executionClosed = false;
+  const closeExecution = async (status: string, usage: ReviewUsage, error: string | null) => {
+    if (executionClosed) return;
+    executionClosed = true;
+    const totals = usageTotals(usage);
+    if (budgetReserved) {
+      await settleExecution(deps.mam, executionId, totals.tokens, totals.costUsd).catch(() => undefined);
+    } else {
+      await releaseExecution(deps.mam, executionId).catch(() => undefined);
+    }
+    await deps.mam.store.finishExecution(executionId, {
+      status,
+      tokensInput: usage.tokens.input,
+      tokensOutput: usage.tokens.output,
+      tokensReasoning: usage.tokens.reasoning,
+      tokensCacheRead: usage.tokens.cacheRead,
+      tokensCacheWrite: usage.tokens.cacheWrite,
+      costUsd: usage.costUsd,
+      costSource: usage.costSource,
+      error,
+    }).catch(() => undefined);
+  };
+
+  let reservation;
+  try {
+    reservation = await reserveExecution(deps.mam, {
+      executionId,
+      projectId: project.projectId,
+      planId: plan.id,
+      phase: task.phase,
+      taskId: taskRow.id,
+      tokens: reserveTokens,
+      costUsd: reserveCost,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await closeExecution("budget_error", emptyUsage(null), message);
+    await deps.planStore.updateSubtaskRun(run.id, {
+      status: "failed",
+      summary: `No se pudo reservar presupuesto: ${message}`,
+      result: { error: message },
+      usage: emptyUsage(null),
+      finishedAt: new Date().toISOString(),
+    }).catch(() => undefined);
+    await deps.planStore.updatePlanTask(plan.id, task.id, {
+      status: "failed",
+      lastError: message,
+      finishedAt: new Date().toISOString(),
+    }).catch(() => undefined);
+    return { task_id: task.id, status: "failed", error: message };
+  }
+  if (!reservation.ok) {
+    const message = `Presupuesto insuficiente: la reserva de ${reserveTokens} tokens / ${reserveCost.toFixed(4)} USD no cabe en el saldo global, de fase o de tarea.`;
+    await closeExecution("budget_rejected", emptyUsage(null), message);
+    await deps.planStore.updateSubtaskRun(run.id, {
+      status: "failed",
+      summary: message,
+      result: { error: message, reservation },
+      usage: emptyUsage(null),
+      finishedAt: new Date().toISOString(),
+    }).catch(() => undefined);
+    await deps.planStore.updatePlanTask(plan.id, task.id, {
+      status: "failed",
+      lastError: message,
+      finishedAt: new Date().toISOString(),
+    }).catch(() => undefined);
+    return { task_id: task.id, status: "failed", error: message, reservation };
+  }
+  budgetReserved = true;
 
   const prompt = [
     `Implementa esta tarea en el worktree asignado.`,
@@ -312,6 +482,8 @@ async function runOne(
     `Tarea: ${task.title}`,
     `Descripción: ${task.description}`,
     `Criterio de aceptación: ${task.acceptanceCriteria}`,
+    `Modelo asignado: ${selection.model}`,
+    `Presupuesto de la tarea: ${selection.maxTokens ?? "sin límite"} tokens / ${selection.maxCostUsd ?? "sin límite"} USD`,
     `Archivos permitidos (globs): ${task.filesOwned.join(", ")}`,
     `No ejecutes shell, no lances subagentes, no edites fuera de los archivos permitidos y no hagas push.`,
     `No commitees: el orquestador hará un commit controlado de tus cambios en esta rama.`,
@@ -325,7 +497,7 @@ async function runOne(
       parentID: String(context.sessionID),
       title: `Implementer · ${task.title}`.slice(0, 120),
       agent: "implementer",
-      model: parseModel(task.model),
+      model: parseModel(effectiveTask.model),
       location: { directory: worktree },
       permissions: implementerPermissions(worktree),
     });
@@ -333,15 +505,22 @@ async function runOne(
     if (!sessionID) throw new Error("No se pudo crear la sesión del implementer.");
     await deps.planStore.updatePlanTask(plan.id, task.id, { sessionId: sessionID });
     await deps.planStore.updateSubtaskRun(run.id, { sessionId: sessionID });
+    await deps.mam.store.setExecutionSession(executionId, sessionID);
     await deps.runtime.session.prompt({ sessionID, text: prompt });
     await waitWithTimeout(deps.runtime, sessionID, Math.max(1, timeoutMinutes) * 60_000);
     const messages = await deps.runtime.session.context({ sessionID });
     const summary = extractFinalText(messages);
     const snapshot = (await deps.usage.getSessionUsage(sessionID)) as SessionUsageSnapshot | null;
     const price = snapshot
-      ? await deps.usage.getModelPrice(snapshot.model || task.model, snapshot.tokens.input + snapshot.tokens.cacheRead)
+      ? await deps.usage.getModelPrice(snapshot.model || effectiveTask.model, snapshot.tokens.input + snapshot.tokens.cacheRead)
       : null;
     const usage = snapshot ? captureUsage(snapshot, price, sessionID) : emptyUsage(sessionID);
+    const totals = usageTotals(usage);
+    const budgetError =
+      (selection.maxTokens !== null && totals.tokens > selection.maxTokens) ||
+      (selection.maxCostUsd !== null && totals.costUsd > selection.maxCostUsd)
+        ? `Presupuesto excedido: ${totals.tokens} tokens / ${totals.costUsd.toFixed(4)} USD; límite ${selection.maxTokens ?? "sin límite"} tokens / ${selection.maxCostUsd ?? "sin límite"} USD.`
+        : null;
 
     const base = await resolveBaseBranch(worktree, profile);
     const filesBefore = await changedFiles(worktree, base);
@@ -354,6 +533,11 @@ async function runOne(
       // parte del mismo estado y no hereda un commit contaminado.
       const result = { summary, files: filesBefore, files_outside: outside, commit: commitBefore, stdout: summary.slice(0, 8_000) };
       const escalation = attempts >= 2;
+      await closeExecution(
+        escalation ? "escalated" : "failed",
+        usage,
+        `Cambios fuera de files_owned: ${outside.join(", ")}`,
+      );
       await deps.planStore.updateSubtaskRun(run.id, {
         status: escalation ? "escalated" : "failed",
         summary: `Cambios fuera de files_owned: ${outside.join(", ")}`,
@@ -396,6 +580,35 @@ async function runOne(
     const commitResult = await runCommand("git rev-parse --short HEAD", worktree, 15_000);
     const commit = commitResult.exitCode === 0 ? commitResult.stdout.trim() : null;
     const result = { summary, files, commit, session_id: sessionID, worktree, branch, usage };
+    if (budgetError) {
+      await closeExecution("budget_exceeded", usage, budgetError);
+      await deps.planStore.updateSubtaskRun(run.id, {
+        status: attempts >= 2 ? "escalated" : "failed",
+        summary: budgetError,
+        result,
+        usage,
+        finishedAt: new Date().toISOString(),
+      });
+      await deps.planStore.updatePlanTask(plan.id, task.id, {
+        status: attempts >= 2 ? "escalated" : "failed",
+        attempts,
+        result,
+        lastError: budgetError,
+        finishedAt: new Date().toISOString(),
+      });
+      return {
+        task_id: task.id,
+        status: attempts >= 2 ? "escalated" : "failed",
+        error: budgetError,
+        session_id: sessionID,
+        worktree,
+        branch,
+        files,
+        commit,
+        summary: summary.slice(0, 2_000),
+      };
+    }
+    await closeExecution("done", usage, null);
     await deps.planStore.updateSubtaskRun(run.id, {
       status: "done",
       summary: summary.slice(0, 8_000),
@@ -409,15 +622,16 @@ async function runOne(
       lastError: null,
       finishedAt: new Date().toISOString(),
     });
-    return { task_id: task.id, status: "review", session_id: sessionID, worktree, branch, files, commit, summary: summary.slice(0, 2_000) };
+    return { task_id: task.id, status: "review", session_id: sessionID, worktree, branch, files, commit, summary: summary.slice(0, 2_000), model: effectiveTask.model, selection_reason: selection.reason };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const escalate = attempts >= 2;
     const snapshot = sessionID ? await deps.usage.getSessionUsage(sessionID).catch(() => null) : null;
     const price = snapshot
-      ? await deps.usage.getModelPrice(snapshot.model || task.model, snapshot.tokens.input + snapshot.tokens.cacheRead)
+      ? await deps.usage.getModelPrice(snapshot.model || effectiveTask.model, snapshot.tokens.input + snapshot.tokens.cacheRead)
       : null;
     const usage = snapshot ? captureUsage(snapshot, price, sessionID || null) : emptyUsage(sessionID || null);
+    await closeExecution(escalate ? "escalated" : "failed", usage, message);
     await deps.planStore.updateSubtaskRun(run.id, {
       status: escalate ? "escalated" : "failed",
       summary: message,
@@ -453,6 +667,8 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
           plan_id: { type: "string" },
           task_ids: { type: "array", items: { type: "string" }, minItems: 1 },
           timeout_minutes: { type: "integer", minimum: 1, maximum: 60, default: 20 },
+          mode: { type: "string", enum: ["auto", "manual", "hybrid"] },
+          confirmed: { type: "boolean", default: false },
         },
         required: ["plan_id", "task_ids"],
         additionalProperties: false,
@@ -488,7 +704,33 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
           selected.push(task);
         }
         const profile = await deps.db.getProfile(project.projectId);
+        const mode = (
+          typeof input.mode === "string" && ["auto", "manual", "hybrid"].includes(input.mode)
+            ? input.mode
+            : await activeMode(deps.mam)
+        ) as WorkMode;
+        const confirmed = input.confirmed === true;
         const timeout = typeof input.timeout_minutes === "number" ? Math.round(input.timeout_minutes) : 20;
+        let parentExecutionId: string;
+        try {
+          parentExecutionId = await deps.mam.store.startExecution({
+            projectId: project.projectId,
+            agentId: "factory",
+            role: "orchestration",
+            planId,
+            mode,
+            selectionReason: "subtask_run: orquestación de la ola",
+            attempt: 1,
+            toolVersions: toolVersions(deps.runtime),
+            priceVersion: await deps.mam.store.priceVersion(),
+            metadata: {
+              tool: "subtask_run",
+              tasks: selected.map((task) => task.id),
+            },
+          });
+        } catch (error) {
+          return fail(error instanceof Error ? error.message : String(error));
+        }
         const results = await Promise.all(
           selected.map(async (task) => {
             try {
@@ -497,7 +739,7 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
                 agent: context.agent,
                 messageID: String(context.messageID),
                 id: String(context.id),
-              }, timeout);
+              }, timeout, mode, confirmed, parentExecutionId);
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
               await deps.planStore.updatePlanTask(plan.id, task.id, {
@@ -509,11 +751,23 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
             }
           }),
         );
+        const allOk = results.every((result) => result.status === "review");
+        await deps.mam.store.finishExecution(parentExecutionId, {
+          status: allOk ? "done" : "failed",
+          error: allOk ? null : "Una o más subtareas no terminaron en review.",
+          metadata: {
+            results: results.map((result) => ({
+              task_id: result.task_id,
+              status: result.status,
+            })),
+          },
+        }).catch(() => undefined);
         return ok({
           plan_id: planId,
           started: selected.length,
           results,
-          ok: results.every((result) => result.status === "review"),
+          parent_execution_id: parentExecutionId,
+          ok: allOk,
         });
       },
     },
@@ -530,6 +784,8 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
           roles: { type: "array", items: { type: "string", enum: ["security", "code", "qa"] } },
           iteration: { type: "integer", minimum: 1, maximum: 3, default: 1 },
           timeout_minutes: { type: "integer", minimum: 1, maximum: 45, default: 15 },
+          mode: { type: "string", enum: ["auto", "manual", "hybrid"] },
+          confirmed: { type: "boolean", default: false },
         },
         required: ["plan_id", "task_id", "gate_run_id"],
         additionalProperties: false,
@@ -561,15 +817,179 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
           : null;
         const roles = requestedRoles ?? (isSensitiveTask(task) ? ["security", "code", "qa"] : ["code", "qa"]);
         const timeout = (typeof input.timeout_minutes === "number" ? Math.round(input.timeout_minutes) : 15) * 60_000;
-        const route = routeReviewMap(task.model);
+        const profile = await deps.db.getProfile(project.projectId);
+        const mode = (
+          typeof input.mode === "string" && ["auto", "manual", "hybrid"].includes(input.mode)
+            ? input.mode
+            : await activeMode(deps.mam)
+        ) as WorkMode;
+        const confirmed = input.confirmed === true;
+        const implementerExecutions = await deps.mam.store.listExecutions({
+          projectId: project.projectId,
+          role: "implementer",
+          taskId: task.taskId ?? undefined,
+          limit: 5,
+        });
+        const parentExecutionId = implementerExecutions[0]?.id ?? null;
+
+        type PlannedReview = {
+          role: string;
+          agent: string;
+          selection: Awaited<ReturnType<typeof selectModel>>;
+          executionId: string;
+          budgetReserved: boolean;
+          closed: boolean;
+          reserveTokens: number;
+          reserveCost: number;
+        };
+        const planned: PlannedReview[] = [];
+
+        const closeOne = async (
+          entry: PlannedReview,
+          status: string,
+          usage: ReviewUsage,
+          error: string | null,
+        ) => {
+          if (entry.closed) return;
+          entry.closed = true;
+          const totals = usageTotals(usage);
+          if (entry.budgetReserved) {
+            await settleExecution(deps.mam, entry.executionId, totals.tokens, totals.costUsd).catch(() => undefined);
+          } else {
+            await releaseExecution(deps.mam, entry.executionId).catch(() => undefined);
+          }
+          await deps.mam.store.finishExecution(entry.executionId, {
+            status,
+            tokensInput: usage.tokens.input,
+            tokensOutput: usage.tokens.output,
+            tokensReasoning: usage.tokens.reasoning,
+            tokensCacheRead: usage.tokens.cacheRead,
+            tokensCacheWrite: usage.tokens.cacheWrite,
+            costUsd: usage.costUsd,
+            costSource: usage.costSource,
+            error,
+            gateRunId,
+          }).catch(() => undefined);
+        };
+
         for (const role of roles) {
-          const model = route[role as "security" | "code" | "qa"];
-          if (sameFamily(task.model, model)) {
-            return fail(`El modelo ${role} (${model}) es de la misma familia que el autor (${task.model}).`);
+          const agent = REVIEW_AGENTS[role]!;
+          let selection;
+          try {
+            selection = await selectModel({
+              mam: deps.mam,
+              projectId: project.projectId,
+              planId,
+              task,
+              role: role as "security" | "code" | "qa",
+              mode,
+              agentId: agent,
+              authorModel: task.model,
+              confirmed,
+              attempt: iteration,
+            });
+          } catch (error) {
+            for (const entry of planned) {
+              await closeOne(entry, "released", emptyUsage(null), "Cancelado por error de selección.");
+            }
+            return fail(error instanceof Error ? error.message : String(error));
+          }
+          if (selection.requiresApproval) {
+            for (const entry of planned) {
+              await closeOne(entry, "released", emptyUsage(null), "Pendiente de aprobación.");
+            }
+            return fail(`El modo híbrido requiere aprobación para el revisor ${role}: ${selection.model} (${selection.reason}).`);
+          }
+          if (sameFamily(task.model, selection.model)) {
+            for (const entry of planned) {
+              await closeOne(entry, "released", emptyUsage(null), "Modelo de la misma familia.");
+            }
+            return fail(`El modelo ${role} (${selection.model}) es de la misma familia que el autor (${task.model}).`);
+          }
+          const reserveTokens = estimateReserveTokens(task.difficulty, selection.maxTokens);
+          const reserveCost = await estimateReserveCost(
+            deps.mam.store,
+            selection.providerId,
+            selection.modelId,
+            reserveTokens,
+            selection.maxCostUsd,
+          );
+          let executionId: string;
+          try {
+            executionId = await deps.mam.store.startExecution({
+              projectId: project.projectId,
+              phase: task.phase,
+              parentExecutionId,
+              profileId: selection.profileId,
+              agentId: agent,
+              providerId: selection.providerId,
+              modelId: selection.modelId,
+              role,
+              taskId: task.taskId,
+              planId,
+              mode,
+              selectionReason: selection.reason,
+              attempt: iteration,
+              toolVersions: toolVersions(deps.runtime),
+              gateRunId,
+              priceVersion: await deps.mam.store.priceVersion(),
+              metadata: {
+                review_role: role,
+                iteration,
+                plan_task_id: taskId,
+                reserved_tokens: reserveTokens,
+                reserved_cost_usd: reserveCost,
+              },
+            });
+          } catch (error) {
+            for (const entry of planned) {
+              await closeOne(entry, "released", emptyUsage(null), "Error de execution log.");
+            }
+            return fail(error instanceof Error ? error.message : String(error));
+          }
+          const entry: PlannedReview = {
+            role,
+            agent,
+            selection,
+            executionId,
+            budgetReserved: false,
+            closed: false,
+            reserveTokens,
+            reserveCost,
+          };
+          planned.push(entry);
+          try {
+            const reservation = await reserveExecution(deps.mam, {
+              executionId,
+              projectId: project.projectId,
+              planId,
+              phase: task.phase,
+              taskId: task.taskId,
+              tokens: reserveTokens,
+              costUsd: reserveCost,
+            });
+            if (!reservation.ok) {
+              const message = `Presupuesto insuficiente para el revisor ${role}: ${reserveTokens} tokens / ${reserveCost.toFixed(4)} USD.`;
+              for (const item of planned) {
+                await closeOne(item, "budget_rejected", emptyUsage(null), message);
+              }
+              return fail(message);
+            }
+            entry.budgetReserved = true;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            for (const item of planned) {
+              await closeOne(item, "budget_error", emptyUsage(null), message);
+            }
+            return fail(message);
           }
         }
 
-        const base = await resolveBaseBranch(task.worktree, await deps.db.getProfile(project.projectId));
+        const route = Object.fromEntries(
+          planned.map((entry) => [entry.role, entry.selection.model]),
+        ) as Record<string, string>;
+
+        const base = await resolveBaseBranch(task.worktree, profile);
         const filesResult = await runCommand(`git diff --name-only ${shellQuote(base)}...HEAD --`, task.worktree, 20_000);
         const diffResult = await runCommand(`git diff ${shellQuote(base)}...HEAD --`, task.worktree, 30_000);
         const changed = filesResult.exitCode === 0 ? filesResult.stdout.trim() : "";
@@ -582,42 +1002,90 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
           .map((item) => `${String(item.gate)}: ${String(item.status)} — ${String(item.evidence ?? "")}`)
           .join("\n");
 
-        const sessions = await Promise.all(roles.map(async (role) => {
-          const agent = REVIEW_AGENTS[role]!;
-          const model = route[role as "security" | "code" | "qa"];
-          const session = await deps.runtime.session.create({
-            parentID: String(context.sessionID),
-            title: `${role} · ${task.title}`.slice(0, 120),
-            agent,
-            model: parseModel(model),
-            location: { directory: task.worktree },
+        let sessions: Array<Record<string, unknown>> = [];
+        try {
+          sessions = await Promise.all(planned.map(async (entry) => {
+            const session = await deps.runtime.session.create({
+              parentID: String(context.sessionID),
+              title: `${entry.role} · ${task.title}`.slice(0, 120),
+              agent: entry.agent,
+              model: parseModel(entry.selection.model),
+              location: { directory: task.worktree },
+            });
+            const sessionID = String(session.id ?? "");
+            if (!sessionID) throw new Error(`No se pudo crear la sesión del revisor ${entry.role}.`);
+            await deps.mam.store.setExecutionSession(entry.executionId, sessionID);
+            const prompt = [
+              `Revisa la tarea "${task.title}" de la subtarea.`,
+              `task_id: ${task.taskId}`,
+              `gate_run_id: ${gateRunId}`,
+              `iteration: ${iteration}`,
+              `model: ${entry.selection.model}`,
+              `Criterio de aceptación: ${task.acceptanceCriteria}`,
+              `Worktree: ${task.worktree}`,
+              `Archivos asignados: ${task.filesOwned.join(", ")}`,
+              `Archivos cambiados (rutas absolutas): ${changed.split(/\r?\n/).filter(Boolean).map((file) => `${task.worktree}/${file}`).join(", ") || "(sin diff)"}`,
+              `Archivos cambiados: ${changed || "(sin diff)"}`,
+              `Gate: ${gate.summary ?? "sin resumen"}`,
+              gateDetails || "(sin evidencia de test/security)",
+              diffTruncated ? "Aviso: el diff se truncó a 60 KB; revisa los archivos grandes por separado." : "",
+              "Diff:",
+              "```diff",
+              diff || "(sin diff)",
+              "```",
+              `Eres el revisor ${entry.role}. No edites archivos. Usa exactamente el modelo ${entry.selection.model}. Al terminar, llama a review_submit con role="${entry.role}", model="${entry.selection.model}", verdict, findings, summary, task_id, gate_run_id e iteration.`,
+            ].join("\n");
+            await deps.runtime.session.prompt({ sessionID, text: prompt });
+            await waitWithTimeout(deps.runtime, sessionID, timeout);
+            const snapshot = await deps.usage.getSessionUsage(sessionID);
+            const price = snapshot
+              ? await deps.usage.getModelPrice(
+                  snapshot.model || entry.selection.model,
+                  snapshot.tokens.input + snapshot.tokens.cacheRead,
+                )
+              : null;
+            const usage = snapshot ? captureUsage(snapshot, price, sessionID) : emptyUsage(sessionID);
+            const totals = usageTotals(usage);
+            const exceeded =
+              (entry.selection.maxTokens !== null && totals.tokens > entry.selection.maxTokens) ||
+              (entry.selection.maxCostUsd !== null && totals.costUsd > entry.selection.maxCostUsd);
+            await closeOne(
+              entry,
+              exceeded ? "budget_exceeded" : "done",
+              usage,
+              exceeded ? "Presupuesto excedido." : null,
+            );
+            return {
+              role: entry.role,
+              model: entry.selection.model,
+              session_id: sessionID,
+              usage,
+              budget_exceeded: exceeded,
+              max_tokens: entry.selection.maxTokens,
+              max_cost_usd: entry.selection.maxCostUsd,
+            };
+          }));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          for (const entry of planned) {
+            await closeOne(entry, "failed", emptyUsage(null), message);
+          }
+          return fail(message);
+        }
+
+        const exceededSessions = sessions.filter((session) => session.budget_exceeded === true);
+        if (exceededSessions.length > 0) {
+          const message = `Presupuesto excedido en revisiones: ${exceededSessions
+            .map((session) => String(session.role))
+            .join(", ")}.`;
+          await deps.planStore.updatePlanTask(planId, taskId, {
+            status: "blocked",
+            reviewRoute: route,
+            result: { ...task.result, reviews: [], review_sessions: sessions },
+            lastError: message,
           });
-          const sessionID = String(session.id ?? "");
-          const prompt = [
-            `Revisa la tarea "${task.title}" de la subtarea.`,
-            `task_id: ${task.taskId}`,
-            `gate_run_id: ${gateRunId}`,
-            `iteration: ${iteration}`,
-            `model: ${model}`,
-            `Criterio de aceptación: ${task.acceptanceCriteria}`,
-            `Worktree: ${task.worktree}`,
-            `Archivos asignados: ${task.filesOwned.join(", ")}`,
-            `Archivos cambiados (rutas absolutas): ${changed.split(/\r?\n/).filter(Boolean).map((file) => `${task.worktree}/${file}`).join(", ") || "(sin diff)"}`,
-            `Archivos cambiados: ${changed || "(sin diff)"}`,
-            `Gate: ${gate.summary ?? "sin resumen"}`,
-            gateDetails || "(sin evidencia de test/security)",
-            diffTruncated ? "Aviso: el diff se truncó a 60 KB; revisa los archivos grandes por separado." : "",
-            "Diff:",
-            "```diff",
-            diff || "(sin diff)",
-            "```",
-            `Eres el revisor ${role}. No edites archivos. Al terminar, llama a review_submit con role="${role}", model="${model}", verdict, findings, summary, task_id, gate_run_id e iteration.`,
-          ].join("\n");
-          if (!sessionID) throw new Error(`No se pudo crear la sesión del revisor ${role}.`);
-          await deps.runtime.session.prompt({ sessionID, text: prompt });
-          await waitWithTimeout(deps.runtime, sessionID, timeout);
-          return { role, model, sessionID };
-        }));
+          return fail(message);
+        }
 
         const latest = await deps.db.getReviewsForGate(task.taskId!, gateRunId, iteration);
         const reviews = [];
@@ -625,6 +1093,12 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
           const review = latest.find((item) => item.role === role);
           if (!review) return fail(`El revisor ${role} no llamó a review_submit.`);
           if (sameFamily(task.model, review.model)) return fail(`El revisor ${role} usó un modelo de la misma familia que el autor.`);
+          const plannedReview = planned.find((entry) => entry.role === role);
+          if (plannedReview && review.model !== plannedReview.selection.model) {
+            return fail(
+              `El revisor ${role} reportó ${review.model}, pero el modelo bloqueado era ${plannedReview.selection.model}.`,
+            );
+          }
           reviews.push({
             role,
             id: review.id,
@@ -647,6 +1121,8 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
           approved,
           reviews,
           sessions,
+          mode,
+          route,
         });
       },
     },

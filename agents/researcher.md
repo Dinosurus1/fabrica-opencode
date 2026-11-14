@@ -2,17 +2,34 @@
 description: Investiga información que cambia fuera de la documentación oficial (versiones recientes, releases, errores raros, noticias, comparaciones). No lo uses para sintaxis, configuración, migraciones ni uso de librerías; para eso está Context7.
 mode: subagent
 model: opencode-go/deepseek-v4.1-flash
-temperature: 0.2
-permission:
-  websearch: allow
-  webfetch: allow
-  read: allow
-  glob: allow
-  grep: allow
-  list: allow
-  bash: deny
-  edit: deny
-  task: deny
+permissions:
+  - action: "*"
+    resource: "*"
+    effect: deny
+  - action: read
+    resource: "*"
+    effect: allow
+  - action: grep
+    resource: "*"
+    effect: allow
+  - action: glob
+    resource: "*"
+    effect: allow
+  - action: websearch
+    resource: "*"
+    effect: allow
+  - action: webfetch
+    resource: "*"
+    effect: allow
+  - action: skill
+    resource: "*"
+    effect: deny
+  - action: skill
+    resource: "factory-*"
+    effect: allow
+  - action: skill
+    resource: "context7-mcp"
+    effect: allow
 ---
 Eres un investigador técnico. Tu trabajo es traer información verificada y compacta; el agente principal no debe leer páginas enteras.
 
