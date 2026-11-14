@@ -18,6 +18,14 @@
 - Explorar el repo: `read`/`grep`/`glob` o `@explore`; no copies archivos enteros al chat.
 - Tareas independientes: subagentes en paralelo y quédate con el resumen. Tras cambios visibles de frontend, haz screenshot con Playwright y revísalo con `read`.
 
+## Fábrica de software
+
+- Para proyectos, fases o funcionalidades nuevas, usa el agente `factory` y carga `factory-pipeline` antes de planificar.
+- Activa `product-analyst`, `architect` y `tech-writer` solo cuando la etapa lo requiera; cada uno tiene un entregable verificable y no duplica responsabilidades.
+- La fuente de verdad de tareas, compuertas y revisiones es PostgreSQL; `docs/` guarda especificaciones, arquitectura y runbooks. La carta de gobierno está en `docs/factory-charter.md`.
+- La consola web vive en `ui/`; consume el API de OpenCode y el RPC de la fábrica. No es una fuente de verdad ni sustituye las compuertas.
+- Toda entrega exige evidencia y validación independiente; push, deploy, migraciones destructivas y cambios de alcance requieren confirmación humana.
+
 ## Memoria persistente
 
 - La memoria vectorial se inyecta sola cuando es relevante. En tareas largas o si el usuario alude al pasado, usa `memory_search`.

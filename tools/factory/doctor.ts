@@ -39,6 +39,9 @@ const EXPECTED_AGENTS: Record<string, string> = {
   "code-reviewer": "opencode-go/claude-haiku-5-5",
   "qa-engineer": "opencode-go/minimax-m3",
   helper: "opencode-go/glm-5.3-flash",
+  "product-analyst": "opencode-go/glm-5.3",
+  architect: "opencode-go/glm-5.3",
+  "tech-writer": "opencode-go/glm-5.3-flash",
 };
 
 const EXPECTED_TOOLS = [
@@ -66,6 +69,16 @@ const EXPECTED_TOOLS = [
   "subtask_integrate",
   "phase_close",
   "plan_resume",
+  "model_catalog_sync",
+  "model_catalog_list",
+  "agent_catalog_list",
+  "model_profile_list",
+  "model_profile_get",
+  "model_profile_set",
+  "model_profile_validate",
+  "model_profile_delete",
+  "model_profile_apply",
+  "mam_status",
   "factory_doctor",
 ];
 
@@ -149,6 +162,12 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
             "plan_validations",
             "subtask_runs",
             "phase_closures",
+            "factory_models",
+            "factory_agent_catalog",
+            "factory_execution_profiles",
+            "factory_profile_assignments",
+            "factory_audit_events",
+            "factory_execution_log",
           ]) {
             try {
               const present = await deps.db.tableExists(table);
@@ -160,7 +179,7 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
           try {
             const version = await deps.db.getMeta("schema_version");
             const numeric = Number(version);
-            add("migración:schema_version", numeric === 5 ? "ok" : "error", `schema_version=${String(version ?? "desconocida")}; esperado 5`);
+            add("migración:schema_version", numeric === 6 ? "ok" : "error", `schema_version=${String(version ?? "desconocida")}; esperado 6`);
           } catch (error) {
             add("migración:schema_version", "error", error instanceof Error ? error.message : String(error));
           }
@@ -194,6 +213,13 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
             ["review_runs", "tokens_cache_write"],
             ["review_runs", "cost_usd"],
             ["review_runs", "cost_source"],
+            ["factory_models", "authorized"],
+            ["factory_models", "prohibited"],
+            ["factory_models", "capabilities"],
+            ["factory_models", "cost_input"],
+            ["factory_execution_profiles", "is_default"],
+            ["factory_profile_assignments", "locked"],
+            ["factory_execution_log", "cost_usd"],
           ] as const) {
             try {
               const present = await deps.db.columnExists(table, column);

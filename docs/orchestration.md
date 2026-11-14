@@ -172,8 +172,10 @@ factory_doctor()
 
 ## 5. Esquema de datos
 
-Migraciones: `004_orchestration.sql` y `005_review_severity.sql`
-(`schema_version=5`).
+Migraciones: `004_orchestration.sql`, `005_review_severity.sql` y
+`006_model_agent_management.sql` (`schema_version=6`). La 006 añade el catálogo
+MAM, perfiles, asignaciones, auditoría y registro de ejecución; es independiente
+del flujo por fases y se documenta en `README.md` y `ui/README.md`.
 
 | Tabla | Uso |
 |---|---|

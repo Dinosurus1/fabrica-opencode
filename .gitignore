@@ -36,6 +36,9 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+ui/dist/
+ui/.vite/
+.playwright-mcp/
 
 # Packs de Semgrep: licencia Semgrep Rules v1.0, se descargan aparte
 plugins/factory/rules/packs/

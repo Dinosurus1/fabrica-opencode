@@ -11,6 +11,7 @@ import { createChecksTools } from "./checks.js";
 import { createDoctorTools, type DoctorDeps } from "./doctor.js";
 import { createGatesTools } from "./gates.js";
 import { createGitTools } from "./git.js";
+import { createMamTools, type MamRuntime } from "./mam.js";
 import { createPhaseTools } from "./phase.js";
 import { createPlanTools } from "./plan.js";
 import { createPlanReviewTools } from "./plan-review.js";
@@ -27,6 +28,7 @@ import type { UsageDeps } from "./usage.js";
 export interface FactoryToolDeps {
   db: FactoryDb;
   planStore: PlanStore;
+  mam: MamRuntime;
   resolveProject: (sessionID: string) => Promise<ProjectRef>;
   permission: { assert: (input: Record<string, unknown>) => Promise<void> };
   diagnostics: DoctorDeps["diagnostics"];
@@ -55,6 +57,7 @@ export function createFactoryTools(deps: FactoryToolDeps): ToolDef[] {
     }),
     ...createChecksTools(deps),
     ...createSecurityTools(deps),
+    ...createMamTools({ mam: deps.mam }),
     ...createGitTools(deps),
     ...createGatesTools(deps),
     ...createReviewTools({ ...deps, ...deps.usage }),

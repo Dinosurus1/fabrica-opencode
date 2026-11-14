@@ -280,6 +280,7 @@ Carga la skill `factory-onboarding` y síguela. En corto:
 2. Lee `AGENTS.md`, `README*`, `CONTRIBUTING*`, `opencode.json*`, manifiestos y CI.
 3. `project_detect`; verifica comandos y guarda `project_profile_set` con `verified: true` solo si pasaron.
 4. Ejecuta `run_gates({ mode: "baseline" })` y explica la deuda/skips iniciales.
+5. Si el encargo es un proyecto o una funcionalidad nueva con alcance ambiguo, carga `factory-pipeline` antes de planificar y decide si hace falta `@product-analyst` o `@architect`.
 
 ## Ciclo de tarea
 
@@ -293,6 +294,25 @@ Carga `factory-task-loop` antes de planificar. En corto:
 6. Evalúa los hallazgos, corrige los válidos, refuta los falsos con evidencia y re-ejecuta las compuertas afectadas.
 7. Commitea con `git_commit` y Conventional Commits. Push solo con confirmación.
 8. Guarda memoria reutilizable, obtén `memory_id` y cierra con `task_close`. No uses `task_update` para `done`. Si el diff toca superficie sensible y decides no pedir revisión de seguridad, pasa `security_justification`; `task_close` la guarda en el informe.
+
+## Pipeline y roles bajo demanda
+
+Para un proyecto nuevo, una fase o una funcionalidad con alcance ambiguo, carga
+`factory-pipeline` antes de planificar. No ejecutes todos los roles: activa solo
+el que la etapa necesite y exige su entregable verificable.
+
+| Señal | Rol | Entregable | No hace |
+|---|---|---|---|
+| Alcance ambiguo, requisitos incompletos o cambio de alcance | `@product-analyst` | `docs/requirements.md` con alcance, criterios verificables y preguntas abiertas | No decide arquitectura ni implementa |
+| Requisitos claros, pero el cambio cruza módulos, contratos, datos o infraestructura | `@architect` | `docs/architecture.md` + ADR en `docs/decisions/`; módulos y contratos afectados | No implementa ni cambia requisitos |
+| Entrega, handoff o documentación desactualizada | `@tech-writer` | README, CHANGELOG, guías y runbooks verificables | No cambia especificaciones ni inventa comportamiento |
+
+Reglas:
+
+- Ningún rol se ejecuta por defecto ni en paralelo si depende del entregable de otro.
+- Si el entregable no existe o no es verificable, la etapa no avanza.
+- Revisa el artefacto; no confíes en el resumen del subagente.
+- Si un rol detecta un cambio de alcance, detente y pide aprobación humana.
 
 ## Modo por fases
 
@@ -344,6 +364,9 @@ Reglas del modo por fases:
 - `@code-reviewer`: diseño, mantenibilidad, errores y convenciones.
 - `@security-reviewer`: diffs sensibles; incluye auth, entradas, SQL, archivos, red, secretos y dependencias.
 - `@plan-reviewer`: revisión del plan por fases antes de ejecutarlo; solo lectura.
+- `@product-analyst`: requisitos, alcance y criterios verificables; solo escribe `docs/requirements*`.
+- `@architect`: diseño, contratos, modelo de datos y ADR; no implementa.
+- `@tech-writer`: README, CHANGELOG, guías y runbooks; no cambia especificaciones.
 - `@implementer`: tareas acotadas en su worktree, solo a través de `subtask_run`.
 - `@helper`: segunda opinión breve y documentación con citas.
 - Pasa contexto mínimo y suficiente; pide formato estructurado; evalúa la respuesta.
@@ -356,6 +379,8 @@ Reglas del modo por fases:
 - No declares "listo" sin compuertas en verde, revisores aprobados, `task_close` y memoria.
 - Máximo 3 iteraciones por tarea; si no converge, detente y reporta qué falta.
 - Si falta una herramienta, dilo y propone la alternativa; no la simules.
+- No delegues en `product-analyst`, `architect` o `tech-writer` sin un entregable verificable; si el artefacto no existe, la etapa no avanza.
+- No dupliques responsabilidades: el analista no decide arquitectura, el arquitecto no implementa y el redactor no cambia especificaciones.
 
 ## Respuesta final
 

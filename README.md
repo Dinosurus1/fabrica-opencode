@@ -13,16 +13,23 @@ Licencia **MIT** (ver `LICENSE`). Copyright (c) 2026 Dinosurus.
 La fábrica vive en `~/.config/opencode/` y se compone de:
 
 - `agents/`: orquestador (`factory`), subagentes de revisión, ayuda e
-  investigación, y los agentes del modo por fases (`implementer` y
-  `plan-reviewer`).
+  investigación, los agentes del modo por fases (`implementer` y
+  `plan-reviewer`) y los roles bajo demanda (`product-analyst`, `architect` y
+  `tech-writer`).
 - `skills/`: procedimientos de onboarding, ingesta, triaje, tareas, compuertas,
-  revisión, seguridad, git, orquestación por fases y cierre. Solo se versionan
-  las skills propias `factory-*`; las de `anthropics/skills` quedan en local y
-  no se redistribuyen (ver `docs/skills-import.md`).
+  revisión, seguridad, git, orquestación por fases, pipeline y cierre. Solo se
+  versionan las skills propias `factory-*`; las de `anthropics/skills` quedan en
+  local y no se redistribuyen (ver `docs/skills-import.md`).
 - `tools/factory/`: tools de perfil, tareas, checks, compuertas, seguridad, git,
   revisiones, plan, worktrees, fases, reanudación y diagnóstico.
-- `plugins/factory/`: registro de tools, migraciones SQL y reglas locales de
-  Semgrep.
+- `plugins/factory/`: registro de tools, migraciones SQL, RPC de la fábrica y
+  reglas locales de Semgrep.
+- `ui/`: consola web React/Vite para gestionar sesiones, trabajo, agentes,
+  modelos, memoria y analítica. Se sirve en `127.0.0.1:4173` con proxy
+  autenticado; ver `ui/README.md`.
+- `docs/factory-charter.md`: carta de gobierno, pipeline, roles y evidencias.
+- `docs/factory-update-review.md`: auditoría del paquete `Factory-update` y qué
+  se absorbió o rechazó al migrarlo a V2.
 - `docs/orchestration.md`: guía del modo por fases, esquema, coste y
   desinstalación.
 - `docs/skills-import.md`: origen, licencias, conflictos y modo de carga de las
@@ -158,10 +165,14 @@ La fábrica reutiliza PostgreSQL/pgvector:
 
 No modifica la tabla `memories` ni el esquema de `opencode-memory`; crea
 `factory_projects`, `tasks`, `gate_runs`, `review_runs`, `plans`, `plan_tasks`,
-`plan_reviews`, `plan_validations`, `subtask_runs`, `phase_closures` y
-`factory_meta`. Las migraciones 004 y 005 son aditivas y dejan
-`schema_version=5`; la 005 añade `review_exhausted`, `residual_findings`,
-`approval_waiver` y las métricas por ronda del plan-reviewer.
+`plan_reviews`, `plan_validations`, `subtask_runs`, `phase_closures`,
+`factory_meta`, `factory_models`, `factory_agent_catalog`,
+`factory_execution_profiles`, `factory_profile_assignments`,
+`factory_audit_events` y `factory_execution_log`. Las migraciones 004, 005 y 006
+son aditivas y dejan `schema_version=6`; la 005 añade `review_exhausted`,
+`residual_findings`, `approval_waiver` y las métricas por ronda del
+plan-reviewer; la 006 añade el catálogo MAM, perfiles, asignaciones, auditoría y
+registro de ejecución.
 
 `factory_doctor` da `warn` si faltan `memories` o `capture_state`. Sin memoria,
 las compuertas y las revisiones funcionan, pero `task_close` no puede cerrar.
@@ -188,6 +199,53 @@ cierre.
    revisión, debes pasar `security_justification`; queda guardada.
 5. El push y el deploy no son automáticos. La fábrica commitea en local; el
    push lo decides tú.
+
+## Roles bajo demanda
+
+La fábrica no ejecuta todos los roles en cada proyecto. El orquestador activa
+solo el que la etapa necesita, con un entregable verificable:
+
+| Señal | Rol | Entregable | Límite |
+|---|---|---|---|
+| Alcance ambiguo o requisitos incompletos | `product-analyst` | `docs/requirements.md` con criterios verificables | No decide arquitectura ni implementa |
+| El cambio cruza módulos, contratos, datos o infraestructura | `architect` | `docs/architecture.md` + ADR en `docs/decisions/` | No implementa ni cambia requisitos |
+| Entrega, handoff o documentación desactualizada | `tech-writer` | README, CHANGELOG, guías y runbooks | No cambia especificaciones ni inventa comportamiento |
+
+El procedimiento y las compuertas están en la skill `factory-pipeline`. La carta
+de gobierno completa está en `docs/factory-charter.md`. Si un rol no puede
+escribir su archivo por permisos, devuelve el contenido y el orquestador decide
+dónde guardarlo; no se simula el artefacto.
+
+## Consola web
+
+La consola de `ui/` gestiona la fábrica desde el navegador sin duplicar el
+estado: lee el API de OpenCode y el RPC del plugin, y escribe en PostgreSQL.
+
+```bash
+cd ~/.config/opencode/ui
+npm ci
+npm run build
+npm run start
+```
+
+O desde la raíz del repo:
+
+```bash
+./scripts/factory-ui.sh
+```
+
+Abre <http://127.0.0.1:4173>. El servidor Node sirve `dist/` y proxya `/api` con
+Basic auth leída de `~/.config/opencode/service.json` o `OPENCODE_PASSWORD`; la
+contraseña nunca llega al navegador. Escucha solo en `127.0.0.1` por defecto.
+
+Módulos: Overview, Sessions, Work, Agents, Models, Memory, Projects, Skills,
+Analytics y Settings. La UI envía `location[directory]` del proyecto
+seleccionado para que los modelos y permisos se apliquen a la location correcta.
+
+En esta etapa la UI puede crear/aplicar perfiles de modelo, cambiar el
+agente/modelo de una sesión, enviar prompts, interrumpir y gestionar memoria.
+Configuración, permisos y proveedores se muestran en solo lectura. El detalle
+está en `ui/README.md`.
 
 ## Modo por fases
 
@@ -226,9 +284,45 @@ completa está en `docs/orchestration.md`; este es el resumen:
    worktrees, detecta huérfanos y tareas colgadas.
 
 Autonomía por defecto: `supervised`. La concurrencia por defecto es 3 y se
-configura por plan. El estado vive en PostgreSQL (migraciones 004 y 005), así
+configura por plan. El estado vive en PostgreSQL (migraciones 004, 005 y 006), así
 que una sesión interrumpida no pierde el plan. Los worktrees viven fuera de
 `/tmp`, en `~/.local/share/opencode/worktrees/<proyecto>/`.
+
+## Model & Agent Management
+
+La fábrica separa la **definición del agente** (rol, permisos, prompt) de la
+**asignación de modelo**. Los perfiles de ejecución viven en PostgreSQL y se
+aplican por location de OpenCode:
+
+- `factory_models`: catálogo real sincronizado desde OpenCode (contexto, coste,
+  capacidades, autorización y prohibición).
+- `factory_agent_catalog`: agentes conocidos, rol, modelo configurado y permisos.
+- `factory_execution_profiles` y `factory_profile_assignments`: perfiles
+  reutilizables con una asignación bloqueada por agente.
+- `factory_audit_events`: cambios de perfiles y acciones destructivas.
+- `factory_execution_log`: registro de ejecuciones por agente/modelo.
+
+Tools: `model_catalog_sync`, `model_catalog_list`, `agent_catalog_list`,
+`model_profile_list`, `model_profile_get`, `model_profile_validate`,
+`model_profile_set`, `model_profile_delete`, `model_profile_apply`, `mam_status`.
+
+RPC para la consola web: `/api/rpc/opencode.factory/*` (`models.*`, `agents.list`,
+`profiles.*`, `work.*`, `memory.*`, `analytics.summary`, `health`).
+
+Reglas:
+
+- Cada agente usa el modelo de su asignación; no hay fallback silencioso.
+- `model_profile_apply` valida disponibilidad, tools, contexto, listas de
+  permitidos/prohibidos y presupuesto antes de tocar nada.
+- Aplicar un perfil exige `confirmed=true`; el ID aplicado se guarda por
+  location en `factory_meta` y se restaura al recargar el plugin.
+- **Default ≠ aplicado**: el perfil por defecto es la propuesta; el aplicado es
+  el que está en uso. La consola muestra ambos.
+- Cambiar el modelo no altera permisos, prompts ni skills.
+
+La UI de `ui/` permite sincronizar el catálogo, editar perfiles, asignar modelos
+por rol, aplicar con confirmación y ver el modelo activo y el del perfil. La
+lógica de negocio está en `tools/factory/mam-db.ts` y `tools/factory/mam.ts`.
 
 ## Modelos por rol y cómo cambiarlos
 
@@ -242,6 +336,9 @@ que una sesión interrumpida no pierde el plan. Los worktrees viven fuera de
 | `researcher` | Información cambiante fuera de docs | `opencode-go/deepseek-v4.1-flash` |
 | `plan-reviewer` | Revisión del plan por fases (solo lectura) | `opencode-go/claude-haiku-5-5` |
 | `implementer` | Tarea pequeña aislada en su worktree | `opencode-go/glm-5.3-flash` |
+| `product-analyst` | Requisitos y criterios verificables | `opencode-go/glm-5.3` |
+| `architect` | Diseño, contratos y ADR | `opencode-go/glm-5.3` |
+| `tech-writer` | Documentación y runbooks | `opencode-go/glm-5.3-flash` |
 
 En el modo por fases, `subtask_run` puede fijar otro modelo por tarea y
 `review_run`/`phase_close` eligen el revisor por familia: un revisor nunca usa
@@ -289,6 +386,8 @@ archivo fuera de `files_owned`.
 | `review_run` | Lanza revisores y exige `review_submit`. | Sesiones de solo lectura; modelos de otra familia. |
 | `subtask_integrate` | `git merge --no-ff` en la rama de integración. | Solo `factory/integration/<proyecto>`; aborta conflictos. |
 | `phase_close`, `plan_resume` | Cierre de fase y reconciliación de sesiones/worktrees. | `phase_close` exige gate, revisiones, memoria y `confirmed` en `supervised`. |
+| `model_catalog_sync`, `model_catalog_list`, `agent_catalog_list` | Sincronización y lectura del catálogo MAM. | Sin shell; escribe `factory_models` y `factory_agent_catalog`. |
+| `model_profile_*`, `mam_status` | Perfiles, validación, aplicación y resumen. | `model_profile_apply` transforma agentes por location; exige `confirmed=true`; audita en `factory_audit_events`. |
 | `factory_doctor` | `--version` de escáneres, consultas a PostgreSQL y worktrees. | Sin escritura. |
 | `memory_*` | PostgreSQL + Ollama, si `opencode-memory` está instalado. | Fuera de este repo. |
 

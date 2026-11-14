@@ -13,6 +13,9 @@ Fábrica de software genérica para OpenCode V2. Instalación global en `~/.conf
 | `helper` | subagent | `opencode-go/glm-5.3-flash` | Segunda opinión, documentación con citas e ideas de tests. |
 | `plan-reviewer` | subagent | `opencode-go/claude-haiku-5-5` | Revisión del plan por fases; solo lectura. |
 | `implementer` | subagent | `opencode-go/glm-5.3-flash` | Tarea pequeña y aislada en su worktree; sin shell ni commit. |
+| `product-analyst` | subagent | `opencode-go/glm-5.3` | Requisitos y criterios verificables; no decide arquitectura. |
+| `architect` | subagent | `opencode-go/glm-5.3` | Diseño, contratos y ADR; no implementa. |
+| `tech-writer` | subagent | `opencode-go/glm-5.3-flash` | README, CHANGELOG, guías y runbooks; no cambia especificaciones. |
 
 | Tool | Qué hace |
 |---|---|
@@ -34,9 +37,16 @@ Fábrica de software genérica para OpenCode V2. Instalación global en `~/.conf
 | `git_branch` | Crea o reutiliza una rama de tarea; rechaza ramas protegidas. |
 | `git_commit` | Stagea y commitea solo en rama no protegida; único camino permitido. |
 | `quality_policy_set` | Cambia la política de compuertas; exige `confirmed=true`. |
+| `model_catalog_sync` / `model_catalog_list` / `agent_catalog_list` | Catálogo MAM de modelos y agentes. |
+| `model_profile_*` / `mam_status` | Perfiles de ejecución, asignación de modelo por rol, validación, aplicación y resumen. |
 | `factory_doctor` | Diagnostica PostgreSQL, migraciones, escáneres, packs, modelos/agentes, plugin de memoria y tools. |
 
 Las tools de memoria (`memory_search`, `memory_save`, `memory_forget`, `memory_capture_now`, `memory_stats`) son las del plugin `opencode-memory` ya existente. No se duplican.
+
+El plugin también expone un RPC en `/api/rpc/opencode.factory/*` para la consola
+web: `health`, `models.*`, `agents.list`, `profiles.*`, `work.*`, `memory.*` y
+`analytics.summary`. Las mutaciones de perfiles exigen `confirmed=true` y se
+auditan; el perfil aplicado se guarda por location y se restaura al recargar.
 
 ## Skills
 
@@ -51,6 +61,7 @@ Los procedimientos largos viven en `~/.config/opencode/skills/` y se cargan bajo
 - `factory-security-review`
 - `factory-git-safety`
 - `factory-phase-orchestration`
+- `factory-pipeline`
 - `factory-closure-report`
 
 El prompt de `factory` solo indica cuándo cargar cada una. Se pueden editar sin tocar el agente.
@@ -167,12 +178,14 @@ locales configurados por ese plugin). Solo añade:
 - `subtask_runs`: cada intento de implementer con sesión, worktree, tokens y costo.
 - `phase_closures`: cierre por fase con gate, revisiones, informe y uso.
 - `tasks.author_model`: modelo autor para elegir revisores de otra familia.
-- `factory_meta`: versión de esquema.
+- `factory_meta`: versión de esquema y perfil aplicado por location.
+- `factory_models`, `factory_agent_catalog`, `factory_execution_profiles`, `factory_profile_assignments`, `factory_audit_events`, `factory_execution_log`: MAM.
 
 No modifica `memories` ni `capture_state`. Migraciones idempotentes:
 `plugins/factory/migrations/001_factory.sql`, `002_quality_gates.sql`,
-`003_usage.sql`, `004_orchestration.sql` y `005_review_severity.sql`
-(`schema_version=5`).
+`003_usage.sql`, `004_orchestration.sql`, `005_review_severity.sql` y
+`006_model_agent_management.sql` (`schema_version=6`). La 006 añade catálogo
+MAM, perfiles, asignaciones, auditoría y registro de ejecución.
 
 Se puede cambiar la base con `FACTORY_DATABASE_URL` o
 `OPENCODE_MEMORY_DATABASE_URL`; nunca se registra la URL completa.

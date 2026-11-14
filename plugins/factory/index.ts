@@ -21,7 +21,11 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createFactoryDb, type QueryFn } from "../../tools/factory/db.js";
 import { createFactoryTools } from "../../tools/factory/index.js";
+import { applyProfileFromStore, createMamRuntime, validateProfileInput } from "../../tools/factory/mam.js";
+import { createMamStore } from "../../tools/factory/mam-db.js";
 import { createPlanStore } from "../../tools/factory/plan-db.js";
+import { FactoryRpc } from "./rpc.js";
+import { createFactoryRpcHandlers } from "./rpc-handlers.js";
 import { redact } from "../../tools/factory/exec.js";
 import type { ModelPrice, SessionUsageSnapshot } from "../../tools/factory/usage.js";
 
@@ -71,6 +75,8 @@ export default Plugin.define({
       pool.query(sql, params as unknown[] | undefined)) as unknown as QueryFn;
     const db = createFactoryDb(query, migrations);
     const planStore = createPlanStore(query, db.init);
+    const mamStore = createMamStore(query);
+    const mam = createMamRuntime(mamStore, ctx, ctx.location.directory);
 
     const log = (...args: unknown[]) => console.log("[opencode-factory]", ...args);
     void db
@@ -205,6 +211,7 @@ export default Plugin.define({
       for (const tool of createFactoryTools({
         db,
         planStore,
+        mam,
         resolveProject,
         runtime: ctx,
         permission: {
@@ -224,6 +231,50 @@ export default Plugin.define({
         editor.add(tool as never);
       }
     });
+
+    await ctx.rpc.register(
+      FactoryRpc,
+      createFactoryRpcHandlers({
+        mam,
+        query,
+        defaultProjectId: fallbackProject.projectId,
+      }) as never,
+    );
+
+    // Restaura el perfil aplicado tras un reload o reinicio del plugin. La
+    // asignación de modelos vive en memoria; el ID aplicado se persiste por
+    // location para que el estado sobreviva al ciclo de vida del plugin.
+    void (async () => {
+      try {
+        const appliedId = await mamStore.getAppliedProfile(ctx.location.directory);
+        if (!appliedId) return;
+        const profile = await mamStore.getProfile(appliedId);
+        if (!profile) {
+          log(`perfil aplicado ${appliedId} ya no existe; se ignora`);
+          return;
+        }
+        const issues = await validateProfileInput(mamStore, {
+          id: profile.id,
+          name: profile.name,
+          description: profile.description,
+          mode: profile.mode,
+          isDefault: profile.isDefault,
+          policy: profile.policy,
+          assignments: profile.assignments,
+        });
+        if (issues.some((issue) => issue.severity === "error")) {
+          log(`perfil aplicado ${profile.name} no es válido; se ignora hasta corregirlo`);
+          return;
+        }
+        await applyProfileFromStore(mam, profile);
+        log(`perfil aplicado restaurado: ${profile.name}`);
+      } catch (error) {
+        log(
+          "no se pudo restaurar el perfil aplicado:",
+          redact(error instanceof Error ? error.message : String(error)),
+        );
+      }
+    })();
 
     return async () => {
       await pool.end().catch(() => {});

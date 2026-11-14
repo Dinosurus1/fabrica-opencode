@@ -20,6 +20,25 @@ en el repositorio.
 Las dependencias transitivas se resuelven desde npm y conservan sus propias
 licencias; `package-lock.json` solo fija versiones y no contiene su código.
 
+## Dependencias de la consola web (`ui/`)
+
+Instaladas por `npm ci` desde `ui/package.json`; no se redistribuyen en el
+repositorio.
+
+| Paquete | Versión | Licencia | Uso |
+|---|---|---|---|
+| `react` / `react-dom` | 19.3.1 | MIT | Interfaz. |
+| `react-router-dom` | 7.18.5 | MIT | Navegación. |
+| `@tanstack/react-query` | 5.107.1 | MIT | Estado remoto y caché. |
+| `vite` | 8.3.8 | MIT | Build y dev server. |
+| `@vitejs/plugin-react` | 6.3.0 | MIT | Plugin de React para Vite. |
+| `tailwindcss` / `@tailwindcss/vite` | 4.3.5 | MIT | Estilos. |
+| `recharts` | 3.10.1 | MIT | Gráficas. |
+| `lucide-react` | 1.72.0 | ISC | Iconos. |
+| `@fontsource-variable/inter` | 5.3.0 | OFL-1.1 | Tipografía Inter. |
+| `typescript` | 5.9.3 | Apache-2.0 | Tipos (dev). |
+| `@types/node`, `@types/react`, `@types/react-dom` | — | MIT | Tipos (dev). |
+
 ## Herramientas externas que la fábrica invoca
 
 No se distribuyen con este repositorio. Se usan como binarios del sistema.

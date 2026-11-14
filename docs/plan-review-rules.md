@@ -138,4 +138,4 @@ cuenta**. El usuario decide:
 - `tools/factory/phase.ts`: informe de fase con `review_exemptions` y
   `approval_waiver`.
 - `tools/factory/review-severity.ts`: normalización y resumen de severidad.
-- Verificación: `tsc` en verde y `factory_doctor` con `schema_version=5`.
+- Verificación: `tsc` en verde y `factory_doctor` con `schema_version=5` en el momento de esta validación. La migración 006 eleva el esquema a 6; `factory_doctor` ya espera 6.
