@@ -24,6 +24,7 @@ import { createFactoryTools } from "../../tools/factory/index.js";
 import { applyProfileFromStore, createMamRuntime, validateProfileInput } from "../../tools/factory/mam.js";
 import { createMamStore } from "../../tools/factory/mam-db.js";
 import { createPlanStore } from "../../tools/factory/plan-db.js";
+import { createMemoryBridge } from "./memory-bridge.js";
 import { FactoryRpc } from "./rpc.js";
 import { createFactoryRpcHandlers } from "./rpc-handlers.js";
 import { redact } from "../../tools/factory/exec.js";
@@ -77,6 +78,7 @@ export default Plugin.define({
     const planStore = createPlanStore(query, db.init);
     const mamStore = createMamStore(query);
     const mam = createMamRuntime(mamStore, ctx, ctx.location.directory);
+    const memory = createMemoryBridge(pluginDirectory, query);
 
     const log = (...args: unknown[]) => console.log("[opencode-factory]", ...args);
     void db
@@ -218,6 +220,8 @@ export default Plugin.define({
         db,
         planStore,
         mam,
+        memory,
+        query,
         resolveProject,
         runtime: ctx,
         permission: {
@@ -242,8 +246,10 @@ export default Plugin.define({
       FactoryRpc,
       createFactoryRpcHandlers({
         mam,
+        memory,
         query,
         defaultProjectId: fallbackProject.projectId,
+        resolveProject,
       }) as never,
     );
 
@@ -283,6 +289,7 @@ export default Plugin.define({
     })();
 
     return async () => {
+      await memory.close().catch(() => undefined);
       await pool.end().catch(() => {});
     };
   },

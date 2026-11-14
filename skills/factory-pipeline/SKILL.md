@@ -37,10 +37,16 @@ decisión.
 | 7 | Auditoría | `review_run` / revisores | Veredictos independientes | Sin bloqueantes abiertos |
 | 8 | Aprobación | Humano | Visto bueno | Aprobación explícita si es sensible |
 | 9 | Transferencia | `tech-writer` | README, CHANGELOG, runbooks | Documentación verificable y sin invenciones |
-| 10 | Cierre | `task_close` / `phase_close` | Informe con evidencia y coste | Todo lo anterior en verde |
+| 10 | Cierre | `task_close` / `phase_close` + `memory_upsert` | Informe con evidencia, coste y memoria viva | Todo lo anterior en verde; entidad actualizada, no duplicada |
 
 La etapa 9 puede ocurrir antes del cierre o después de una fase; no bloquea el
 desarrollo si no hay cambios de comportamiento que documentar.
+
+**Memoria:** carga `factory-memory` antes de escribir o consolidar. Busca la
+entidad, decide NOOP/UPDATE/CREATE y usa `memory_upsert` con `entity_key`. Para
+duplicados, sigue el flujo `memory_backup` → `memory_consolidation_plan` →
+aprobación si hay conflictos o confianza baja → `memory_consolidation_apply` →
+`memory_consolidation_verify`.
 
 **Despliegue:** si la tarea es un release, un cambio de infraestructura o un
 rollback, activa `@devops-engineer` y carga `factory-deployment`. Producción

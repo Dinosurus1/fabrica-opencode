@@ -48,7 +48,9 @@ Waivers:
 - `review_submit` para `code` y `qa`; `security` si el cambio lo requiere. `task_close` calcula `security_applicable` del diff (SQL, entradas, auth, archivos, red, secretos, dependencias). Si el diff toca esas categorías y no quieres revisión de seguridad, debes pasar `security_justification`; queda guardada en el informe.
 - Cada revisor con `verdict: "approved"` y `open_blocking: 0`.
 - Cada criterio de aceptación con evidencia.
-- `memory_id` real, guardado en `memories` y del proyecto/global.
+- `memory_id` real, guardado en `memories`, del proyecto/global y creado o
+  actualizado con `memory_upsert` (`project:`, `preference:`, `decision:` o
+  `lesson:`).
 - Rama no protegida.
 - Riesgos residuales escritos.
 

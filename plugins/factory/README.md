@@ -45,7 +45,14 @@ Fábrica de software genérica para OpenCode V2. Instalación global en `~/.conf
 | `executions_list` / `model_history` | Execution log y evaluación de modelos por éxito/coste. |
 | `factory_doctor` | Diagnostica PostgreSQL, migraciones, escáneres, packs, modelos/agentes, plugin de memoria y tools. |
 
-Las tools de memoria (`memory_search`, `memory_save`, `memory_forget`, `memory_capture_now`, `memory_stats`) son las del plugin `opencode-memory` ya existente. No se duplican.
+Las tools base de memoria (`memory_search`, `memory_save`, `memory_forget`,
+`memory_capture_now`, `memory_stats`) son las del plugin `opencode-memory` ya
+existente. La fábrica añade la capa de memoria viva:
+`memory_upsert` (entidad y NOOP/UPDATE/CREATE con historial), `memory_backup`,
+`memory_consolidation_plan` (dry-run), `memory_consolidation_apply` (backup,
+soft delete con `merged_into`, execution log y verificación) y
+`memory_consolidation_verify`. Aplicar exige `confirmed=true`; los clusters con
+conflictos o confianza baja exigen `approve_low_confidence=true`.
 
 El plugin también expone un RPC en `/api/rpc/opencode.factory/*` para la consola
 web: `health`, `models.*`, `agents.list`, `profiles.*`, `work.*`, `memory.*` y
@@ -188,14 +195,16 @@ locales configurados por ese plugin). Solo añade:
 - `factory_models`, `factory_agent_catalog`, `factory_execution_profiles`, `factory_profile_assignments`, `factory_audit_events`, `factory_execution_log`: MAM.
 - `factory_budgets`, `factory_budget_reservations`, `factory_model_prices`: presupuesto y precios.
 
-No modifica `memories` ni `capture_state`. Migraciones idempotentes:
+La 009 añade a `memories` la entidad, documento estructurado, historial, soft
+delete y `memory_backups`; no borra memorias. Migraciones idempotentes:
 `plugins/factory/migrations/001_factory.sql`, `002_quality_gates.sql`,
 `003_usage.sql`, `004_orchestration.sql`, `005_review_severity.sql` y
-`006_model_agent_management.sql`, `007_execution_budgets.sql` y
-`008_budget_units.sql` (`schema_version=8`). La 006 añade catálogo MAM, perfiles,
-asignaciones, auditoría y registro de ejecución; la 007 añade presupuestos,
-reservas atómicas y precios versionados; la 008 renombra `max_tokens` a
-`token_budget`, separa tokens ponderados y registra sobreconsumo.
+`006_model_agent_management.sql`, `007_execution_budgets.sql`,
+`008_budget_units.sql` y `009_memory_lifecycle.sql` (`schema_version=9`). La 006
+añade catálogo MAM, perfiles, asignaciones, auditoría y registro de ejecución; la
+007 añade presupuestos, reservas atómicas y precios versionados; la 008 renombra
+`max_tokens` a `token_budget`, separa tokens ponderados y registra sobreconsumo;
+la 009 añade la memoria viva y sus backups.
 
 Se puede cambiar la base con `FACTORY_DATABASE_URL` o
 `OPENCODE_MEMORY_DATABASE_URL`; nunca se registra la URL completa.

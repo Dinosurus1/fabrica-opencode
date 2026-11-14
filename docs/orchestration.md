@@ -173,12 +173,14 @@ factory_doctor()
 ## 5. Esquema de datos
 
 Migraciones: `004_orchestration.sql`, `005_review_severity.sql`,
-`006_model_agent_management.sql`, `007_execution_budgets.sql` y
-`008_budget_units.sql` (`schema_version=8`). La 006 añade el catálogo MAM,
-perfiles, asignaciones, auditoría y registro de ejecución; la 007 añade
-presupuestos con reservas atómicas y precios versionados; la 008 renombra
-`max_tokens` a `token_budget`, separa tokens ponderados y registra sobreconsumo. Son independientes del flujo por fases y se
-documentan en `README.md` y `ui/README.md`.
+`006_model_agent_management.sql`, `007_execution_budgets.sql`,
+`008_budget_units.sql` y `009_memory_lifecycle.sql` (`schema_version=9`). La 006
+añade el catálogo MAM, perfiles, asignaciones, auditoría y registro de ejecución;
+la 007 añade presupuestos con reservas atómicas y precios versionados; la 008
+renombra `max_tokens` a `token_budget`, separa tokens ponderados y registra
+sobreconsumo; la 009 añade entidad, documento, historial, soft delete y backups
+de memoria. Son independientes del flujo por fases y se documentan en `README.md`
+y `ui/README.md`.
 
 | Tabla | Uso |
 |---|---|

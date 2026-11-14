@@ -45,6 +45,7 @@ const EXPECTED_AGENTS: Record<string, string> = {
   architect: "opencode-go/glm-5.3",
   "tech-writer": "opencode-go/glm-5.3-flash",
   "devops-engineer": "opencode-go/glm-5.3",
+  "memory-consolidator": "opencode-go/glm-5.3-flash",
 };
 
 const EXPECTED_TOOLS = [
@@ -86,6 +87,11 @@ const EXPECTED_TOOLS = [
   "budget_set",
   "executions_list",
   "model_history",
+  "memory_upsert",
+  "memory_backup",
+  "memory_consolidation_plan",
+  "memory_consolidation_apply",
+  "memory_consolidation_verify",
   "factory_agents_get",
   "factory_agents_propose",
   "factory_agents_select",
@@ -180,6 +186,7 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
             "factory_profile_assignments",
             "factory_audit_events",
             "factory_execution_log",
+            "memory_backups",
             "factory_budgets",
             "factory_budget_reservations",
             "factory_model_prices",
@@ -194,7 +201,7 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
           try {
             const version = await deps.db.getMeta("schema_version");
             const numeric = Number(version);
-            add("migración:schema_version", numeric === 8 ? "ok" : "error", `schema_version=${String(version ?? "desconocida")}; esperado 8`);
+            add("migración:schema_version", numeric === 9 ? "ok" : "error", `schema_version=${String(version ?? "desconocida")}; esperado 9`);
           } catch (error) {
             add("migración:schema_version", "error", error instanceof Error ? error.message : String(error));
           }
@@ -254,6 +261,24 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
               add(`columna:${table}.${column}`, present ? "ok" : "error", present ? "existe" : "falta; aplica la migración pendiente");
             } catch (error) {
               add(`columna:${table}.${column}`, "error", error instanceof Error ? error.message : String(error));
+            }
+          }
+        }
+
+        if (await deps.db.tableExists("memories")) {
+          for (const column of [
+            "entity_key",
+            "doc",
+            "related",
+            "last_verified_at",
+            "deleted_at",
+            "merged_into",
+          ]) {
+            try {
+              const present = await deps.db.columnExists("memories", column);
+              add(`columna:memories.${column}`, present ? "ok" : "error", present ? "existe" : "falta; aplica la migración pendiente");
+            } catch (error) {
+              add(`columna:memories.${column}`, "error", error instanceof Error ? error.message : String(error));
             }
           }
         }

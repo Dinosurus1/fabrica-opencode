@@ -64,7 +64,7 @@ No publiques la consola en `0.0.0.0` sin poner delante autenticación y TLS.
 | `/work` | Tareas, planes, gates, revisiones, presupuesto global y execution log. |
 | `/agents` | Selección de agentes por proyecto, modo manual/híbrido/auto y modelo activo. |
 | `/models` | Catálogo real, perfiles, política y asignación de modelo/presupuesto por rol. |
-| `/memory` | Memoria vectorial: auditoría, búsqueda textual, metadatos y borrado. |
+| `/memory` | Memoria vectorial: auditoría, búsqueda textual, metadatos, borrado y consolidación dry-run con backup, aprobación, soft delete y verificación. |
 | `/projects` | Proyectos conocidos por OpenCode. |
 | `/skills` | Skills disponibles y su origen. |
 | `/analytics` | Coste de fábrica, uso estimado de todas las sesiones de OpenCode, tool success e historial por modelo/rol. |
@@ -128,6 +128,10 @@ Factory Console (React/Vite)
   Analytics usa el coste de catálogo de subtasks/reviews.
 - La búsqueda de Memory es textual (`ILIKE`); la búsqueda semántica sigue en el
   chat con `memory_search`.
+- La consolidación de Memory es una propuesta determinista del plan; el agente
+  `memory-consolidator` puede revisarla, pero la UI no aplica nada sin backup y
+  confirmación. Los clusters con conflictos o confianza baja exigen una casilla
+  de aprobación explícita.
 - Configuración, permisos y proveedores son de solo lectura en esta etapa.
 - El bundle inicial supera los 500 KB por Recharts; se puede dividir por rutas
   cuando haga falta.

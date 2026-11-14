@@ -314,6 +314,7 @@ export interface MemoryRecord {
   importance: number;
   pinned: boolean;
   sourceSession: string | null;
+  entityKey?: string | null;
   createdAt: string;
   updatedAt: string;
   lastUsedAt: string | null;
@@ -574,6 +575,7 @@ function mapMemoryRow(row: Record<string, unknown>): MemoryRecord {
     importance: Number(row.importance ?? 3),
     pinned: Boolean(row.pinned),
     sourceSession: row.source_session ? String(row.source_session) : null,
+    entityKey: row.entity_key ? String(row.entity_key) : null,
     createdAt: ISO(row.created_at as Date | string) ?? "",
     updatedAt: ISO(row.updated_at as Date | string) ?? "",
     lastUsedAt: row.last_used_at ? ISO(row.last_used_at as Date | string) : null,
@@ -1525,11 +1527,15 @@ export class MamStore {
     }
     const limit = Math.min(Math.max(filter.limit ?? 100, 1), 500);
     const offset = Math.max(filter.offset ?? 0, 0);
+    if (await this.hasMemoryColumn("deleted_at")) {
+      conditions.push("deleted_at IS NULL");
+    }
     params.push(limit, offset);
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const entityColumn = (await this.hasMemoryColumn("entity_key")) ? "entity_key" : "NULL AS entity_key";
     const result = await this.query<Record<string, unknown>>(
       `SELECT id, scope, project_id, kind, title, content, tags, importance,
-              pinned, source_session, created_at, updated_at, last_used_at, use_count
+              pinned, source_session, ${entityColumn}, created_at, updated_at, last_used_at, use_count
        FROM memories ${where}
        ORDER BY pinned DESC, importance DESC, updated_at DESC
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -1538,19 +1544,37 @@ export class MamStore {
     return result.rows.map(mapMemoryRow);
   }
 
+  private memoryColumnCache = new Map<string, boolean>();
+
+  private async hasMemoryColumn(column: string): Promise<boolean> {
+    const cached = this.memoryColumnCache.get(column);
+    if (cached === true) return true;
+    const result = await this.query<{ present: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'memories' AND column_name = $1
+       ) AS present`,
+      [column],
+    );
+    const present = Boolean(result.rows[0]?.present);
+    this.memoryColumnCache.set(column, present);
+    return present;
+  }
+
   async memoryStats(): Promise<MemoryStats> {
+    const alive = (await this.hasMemoryColumn("deleted_at")) ? " WHERE deleted_at IS NULL" : "";
     const [scopes, kinds, size, dates] = await Promise.all([
       this.query<{ scope: string; count: string }>(
-        `SELECT scope, count(*)::text AS count FROM memories GROUP BY scope`,
+        `SELECT scope, count(*)::text AS count FROM memories${alive} GROUP BY scope`,
       ),
       this.query<{ kind: string; count: string }>(
-        `SELECT kind, count(*)::text AS count FROM memories GROUP BY kind`,
+        `SELECT kind, count(*)::text AS count FROM memories${alive} GROUP BY kind`,
       ),
       this.query<{ size: string }>(
         `SELECT pg_size_pretty(pg_total_relation_size('memories')) AS size`,
       ),
       this.query<{ oldest: Date | string | null; newest: Date | string | null; total: string }>(
-        `SELECT min(created_at) AS oldest, max(updated_at) AS newest, count(*)::text AS total FROM memories`,
+        `SELECT min(created_at) AS oldest, max(updated_at) AS newest, count(*)::text AS total FROM memories${alive}`,
       ),
     ]);
     const byScope: Record<string, number> = {};

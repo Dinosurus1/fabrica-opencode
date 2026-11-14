@@ -221,6 +221,7 @@ export interface MemoryItem {
   importance: number;
   pinned: boolean;
   sourceSession: string | null;
+  entityKey?: string | null;
   createdAt: string;
   updatedAt: string;
   lastUsedAt: string | null;

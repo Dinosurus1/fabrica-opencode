@@ -49,6 +49,7 @@ metadata:
 
 ## 7. Cierre
 
-- Guarda la memoria reutilizable y obtén su `memory_id`.
+- Carga `factory-memory`. Busca la entidad, decide NOOP/UPDATE/CREATE y usa
+  `memory_upsert` con `entity_key`; guarda el `id` devuelto como `memory_id`.
 - Carga `factory-closure-report`.
 - Usa `task_close` con criterios + evidencia, `memory_id`, revisores ya registrados y riesgos residuales. No uses `task_update` para marcar `done`.

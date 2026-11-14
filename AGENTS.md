@@ -30,6 +30,9 @@
 ## Memoria persistente
 
 - La memoria vectorial se inyecta sola cuando es relevante. En tareas largas o si el usuario alude al pasado, usa `memory_search`.
-- Guarda con `memory_save` lo durable: preferencias, decisiones, convenciones, entorno y soluciones reutilizables. Usa `scope: "global"` para lo transversal y `project` para el repo actual.
-- No guardes secretos ni información efímera. No dupliques: corrige o borra lo obsoleto con `memory_forget`. Si una memoria contradice el código, gana el código.
+- Carga `factory-memory` antes de guardar o consolidar.
+- Antes de escribir, busca la entidad y decide NOOP/UPDATE/CREATE. Usa `memory_upsert` con `entity_key`: `project:<slug>` (una por proyecto), `preference:<tema>`, `decision:<slug>` o `lesson:<slug>`.
+- No guardes secretos, código que ya está en el repo, salidas de comandos ni información efímera. No dupliques: si cambia un dato, actualiza la entidad y pasa el anterior al historial con fecha y motivo.
+- Para consolidar: `memory_backup`, `memory_consolidation_plan` (dry-run), aprobación humana si hay conflictos o confianza baja, `memory_consolidation_apply` y `memory_consolidation_verify` con 5-10 consultas reales. Los originales se archivan con soft delete y `merged_into`.
+- Si una memoria contradice el código, gana el código.
 - La captura automática analiza la sesión al quedar inactiva; no hace falta resumir la conversación al final.

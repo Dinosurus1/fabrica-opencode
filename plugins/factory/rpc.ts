@@ -173,6 +173,76 @@ export const FactoryRpc = Rpc.define({
       },
       output: anyObject,
     },
+    "memory.upsert": {
+      input: {
+        type: "object",
+        properties: {
+          entity_key: { type: "string" },
+          scope: { type: "string", enum: ["global", "project"] },
+          kind: { type: "string", enum: ["preference", "fact", "decision", "convention", "snippet"] },
+          title: { type: "string" },
+          sections: { type: "object", additionalProperties: { type: "string" } },
+          content: { type: "string" },
+          tags: { type: "array", items: { type: "string" } },
+          importance: { type: "integer", minimum: 1, maximum: 5 },
+          pinned: { type: "boolean" },
+          related: { type: "array", items: { type: "string" } },
+          reason: { type: "string" },
+          last_verified_at: { type: "string" },
+        },
+        required: ["entity_key"],
+        additionalProperties: false,
+      },
+      output: anyObject,
+    },
+    "memory.backup": {
+      input: {
+        type: "object",
+        properties: {
+          label: { type: "string" },
+          ids: { type: "array", items: { type: "string" } },
+        },
+        additionalProperties: false,
+      },
+      output: anyObject,
+    },
+    "memory.consolidation.plan": {
+      input: {
+        type: "object",
+        properties: {
+          ids: { type: "array", items: { type: "string" } },
+          search: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 200 },
+        },
+        additionalProperties: false,
+      },
+      output: anyObject,
+    },
+    "memory.consolidation.apply": {
+      input: {
+        type: "object",
+        properties: {
+          plan: { type: "object", additionalProperties: true },
+          confirmed: { type: "boolean" },
+          approve_low_confidence: { type: "boolean" },
+          verification_queries: { type: "array", items: { type: "string" } },
+        },
+        required: ["plan"],
+        additionalProperties: false,
+      },
+      output: anyObject,
+    },
+    "memory.consolidation.verify": {
+      input: {
+        type: "object",
+        properties: {
+          queries: { type: "array", items: { type: "string" } },
+          entity_keys: { type: "array", items: { type: "string" } },
+        },
+        additionalProperties: false,
+      },
+      output: anyObject,
+    },
     "memory.list": {
       input: {
         type: "object",

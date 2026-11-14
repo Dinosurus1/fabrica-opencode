@@ -14,6 +14,7 @@ import { createDoctorTools, type DoctorDeps } from "./doctor.js";
 import { createGatesTools } from "./gates.js";
 import { createGitTools } from "./git.js";
 import { createMamTools, type MamRuntime } from "./mam.js";
+import { createMemoryTools, type MemoryBridgeLike } from "./memory.js";
 import { createPhaseTools } from "./phase.js";
 import { createPlanTools } from "./plan.js";
 import { createPlanReviewTools } from "./plan-review.js";
@@ -31,6 +32,8 @@ export interface FactoryToolDeps {
   db: FactoryDb;
   planStore: PlanStore;
   mam: MamRuntime;
+  memory: MemoryBridgeLike;
+  query: import("./db.js").QueryFn;
   resolveProject: (sessionID: string) => Promise<ProjectRef>;
   permission: { assert: (input: Record<string, unknown>) => Promise<void> };
   diagnostics: DoctorDeps["diagnostics"];
@@ -60,6 +63,12 @@ export function createFactoryTools(deps: FactoryToolDeps): ToolDef[] {
     ...createChecksTools(deps),
     ...createSecurityTools(deps),
     ...createMamTools({ mam: deps.mam }),
+    ...createMemoryTools({
+      query: deps.query,
+      mam: deps.mam,
+      memory: deps.memory,
+      resolveProject: deps.resolveProject,
+    }),
     ...createBudgetTools({ mam: deps.mam, resolveProject: deps.resolveProject }),
     ...createAgentSelectionTools({ mam: deps.mam, resolveProject: deps.resolveProject }),
     ...createGitTools(deps),

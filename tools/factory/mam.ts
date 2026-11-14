@@ -48,6 +48,7 @@ const ROLE_BY_AGENT: Record<string, string> = {
   "security-reviewer": "security",
   "tech-writer": "documentation",
   "devops-engineer": "devops",
+  "memory-consolidator": "memory",
   "plan-reviewer": "planning",
   helper: "assistance",
   researcher: "research",

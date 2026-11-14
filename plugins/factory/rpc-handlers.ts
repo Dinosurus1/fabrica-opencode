@@ -7,6 +7,7 @@
  */
 
 import type { QueryFn } from "../../tools/factory/db.js";
+import { createMemoryTools, type MemoryBridgeLike } from "../../tools/factory/memory.js";
 import {
   AGENT_CATALOG,
   applySelectionPermissions,
@@ -26,8 +27,10 @@ import {
 
 export interface FactoryRpcDeps {
   mam: MamRuntime;
+  memory: MemoryBridgeLike;
   query: QueryFn;
   defaultProjectId: string;
+  resolveProject: (sessionID: string) => Promise<{ projectId: string; directory: string; name: string }>;
 }
 
 function asString(value: unknown, fallback = ""): string {
@@ -66,6 +69,27 @@ function countsBy(rows: Array<Record<string, unknown>>, key: string): Record<str
 
 export function createFactoryRpcHandlers(deps: FactoryRpcDeps) {
   const { mam, query } = deps;
+  const memoryTools = createMemoryTools({
+    query,
+    mam,
+    memory: deps.memory,
+    resolveProject: deps.resolveProject,
+  });
+  async function runMemoryTool(name: string, input: Record<string, unknown>) {
+    const tool = memoryTools.find((item) => item.name === name);
+    if (!tool) throw new Error(`Tool de memoria no disponible: ${name}`);
+    const result = await tool.execute(input, {
+      sessionID: "factory-ui",
+      agent: "factory",
+      messageID: "",
+      id: "",
+    });
+    try {
+      return JSON.parse(result.content) as unknown;
+    } catch {
+      return result.content;
+    }
+  }
 
   return {
     async health() {
@@ -378,6 +402,26 @@ export function createFactoryRpcHandlers(deps: FactoryRpcDeps) {
         [project, asNumber(input.limit, 50)],
       );
       return { count: result.rows.length, reviews: result.rows.map(serializeRow) };
+    },
+
+    async "memory.upsert"(input: Record<string, unknown>) {
+      return runMemoryTool("memory_upsert", input);
+    },
+
+    async "memory.backup"(input: Record<string, unknown>) {
+      return runMemoryTool("memory_backup", input);
+    },
+
+    async "memory.consolidation.plan"(input: Record<string, unknown>) {
+      return runMemoryTool("memory_consolidation_plan", input);
+    },
+
+    async "memory.consolidation.apply"(input: Record<string, unknown>) {
+      return runMemoryTool("memory_consolidation_apply", input);
+    },
+
+    async "memory.consolidation.verify"(input: Record<string, unknown>) {
+      return runMemoryTool("memory_consolidation_verify", input);
     },
 
     async "memory.list"(input: Record<string, unknown>) {

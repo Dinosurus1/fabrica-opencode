@@ -85,6 +85,7 @@ ni arquitectura; un proyecto nuevo o un cambio que cruza módulos sí.
 | `plan-reviewer` | Antes de aprobar un plan por fases | Veredicto del plan y hallazgos | No edita el plan ni lo aprueba |
 | `tech-writer` | Entrega, handoff o documentación desactualizada | README, CHANGELOG, guías y runbooks | No cambia especificaciones ni inventa comportamiento |
 | `devops-engineer` | Release, Docker/CI, health checks o rollback | Cambios de infra/CI, runbook y rollback probado | No despliega producción sin aprobación humana |
+| `memory-consolidator` | Duplicados, conflictos o memoria antigua | JSON de consolidación (`clusters`, `conflicts`, `confidence`) | No edita, no borra y no aplica cambios |
 | `helper` | Segunda opinión breve o documentación con citas | Respuesta acotada | No sustituye compuertas ni revisiones |
 | `researcher` | Información cambiante fuera de la documentación oficial | Hallazgos con fuentes | No decide arquitectura ni implementa |
 | `explore` | Búsqueda rápida en el código | Rutas y hallazgos | No edita |
@@ -100,6 +101,9 @@ El orquestador los activa cuando la etapa lo requiere y lo justifica:
   módulos o una integración que puede romper otros componentes.
 - `tech-writer`: cuando hay que transferir el trabajo, actualizar documentación
   pública o dejar un runbook verificable.
+- `memory-consolidator`: cuando `memory_consolidation_plan` detecta duplicados,
+  conflictos o clusters de baja confianza; solo propone JSON y el orquestador
+  aplica tras aprobación humana.
 
 Condiciones:
 

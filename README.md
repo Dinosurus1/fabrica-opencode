@@ -14,8 +14,9 @@ La fábrica vive en `~/.config/opencode/` y se compone de:
 
 - `agents/`: orquestador (`factory`), subagentes de revisión, ayuda e
   investigación, los agentes del modo por fases (`implementer` y
-  `plan-reviewer`) y los roles bajo demanda (`product-analyst`, `architect`,
-  `tech-writer` y `devops-engineer`).
+  `plan-reviewer`), los roles bajo demanda (`product-analyst`, `architect`,
+  `tech-writer` y `devops-engineer`) y el consolidador de memoria
+  (`memory-consolidator`).
 - `skills/`: procedimientos de onboarding, ingesta, triaje, tareas, compuertas,
   revisión, seguridad, git, orquestación por fases, pipeline, despliegue y
   cierre. Solo se versionan las skills propias `factory-*`; las de
@@ -170,13 +171,14 @@ No modifica la tabla `memories` ni el esquema de `opencode-memory`; crea
 `factory_meta`, `factory_models`, `factory_agent_catalog`,
 `factory_execution_profiles`, `factory_profile_assignments`,
 `factory_audit_events`, `factory_execution_log`, `factory_budgets`,
-`factory_budget_reservations` y `factory_model_prices`. Las migraciones 004, 005,
-006, 007 y 008 son aditivas y dejan `schema_version=8`; la 005 añade
-`review_exhausted`, `residual_findings`, `approval_waiver` y las métricas por
-ronda del plan-reviewer; la 006 añade el catálogo MAM, perfiles, asignaciones,
-auditoría y registro de ejecución; la 007 añade presupuestos con reservas
-atómicas y precios versionados; la 008 renombra `max_tokens` a `token_budget`,
-separa tokens ponderados y registra sobreconsumo.
+`factory_budget_reservations`, `factory_model_prices`, `memory_backups`. Las
+migraciones 004, 005, 006, 007, 008 y 009 son aditivas y dejan
+`schema_version=9`; la 005 añade `review_exhausted`, `residual_findings`,
+`approval_waiver` y las métricas por ronda del plan-reviewer; la 006 añade el
+catálogo MAM, perfiles, asignaciones, auditoría y registro de ejecución; la 007
+añade presupuestos con reservas atómicas y precios versionados; la 008 renombra
+`max_tokens` a `token_budget`, separa tokens ponderados y registra sobreconsumo;
+la 009 añade entidad, documento, historial, soft delete y backups de memoria.
 
 `factory_doctor` da `warn` si faltan `memories` o `capture_state`. Sin memoria,
 las compuertas y las revisiones funcionan, pero `task_close` no puede cerrar.
@@ -225,6 +227,9 @@ dónde guardarlo; no se simula el artefacto.
 
 La consola de `ui/` gestiona la fábrica desde el navegador sin duplicar el
 estado: lee el API de OpenCode y el RPC del plugin, y escribe en PostgreSQL.
+**La UI es opcional**: la fábrica funciona solo con las tools y PostgreSQL. Se
+recomienda para revisar sesiones, presupuestos, execution log, memoria y
+analítica sin escribir SQL.
 
 ```bash
 cd ~/.config/opencode/ui
@@ -250,9 +255,42 @@ seleccionado para que los modelos y permisos se apliquen a la location correcta.
 En esta etapa la UI puede crear/aplicar perfiles de modelo, editar la política
 (permitidos, prohibidos, contexto mínimo, tools), fijar presupuestos, seleccionar
 agentes y aplicarlos a la sesión, cambiar el agente/modelo de una sesión, enviar
-prompts, interrumpir, ver el execution log y gestionar memoria. Configuración,
-permisos de archivos y proveedores se muestran en solo lectura. El detalle está
-en `ui/README.md`.
+prompts, interrumpir, ver el execution log y gestionar memoria. La pestaña Memory
+incluye consolidación dry-run: muestra el plan, exige aprobación si hay
+conflictos o confianza baja, crea backup, aplica el soft delete y verifica con
+consultas reales. Configuración, permisos de archivos y proveedores se muestran
+en solo lectura. El detalle está en `ui/README.md`.
+
+## Memoria viva
+
+La memoria no es un diario. Antes de escribir, el agente busca la entidad y
+decide **NOOP**, **UPDATE** o **CREATE**; una entidad conocida nunca se duplica.
+
+| Entidad | Cardinalidad | Contenido |
+|---|---|---|
+| `project:<slug>` | Una por proyecto | Resumen, Stack, Estado actual, Decisiones, Pendientes, Historial de cambios |
+| `preference:<tema>` | Una por tema | Idioma, estilo, herramientas, entorno |
+| `decision:<slug>` | Una por decisión | Contexto, decisión, alternativas, consecuencias |
+| `lesson:<slug>` | Una por aprendizaje | Error, causa, solución reutilizable |
+
+`memory_upsert` conserva las secciones no tocadas, añade el historial con fecha y
+motivo y regenera el embedding. No se guardan secretos, código del repo, salidas
+de comandos ni contenido efímero.
+
+Para consolidar hay un flujo seguro:
+
+1. `memory_backup` guarda un JSON en `~/.config/opencode/backups/` y una fila en
+   `memory_backups`.
+2. `memory_consolidation_plan` genera un dry-run con `merged_content`,
+   `dropped_facts`, `conflicts` y `confidence`; no escribe nada.
+3. Los clusters con conflictos o `confidence < 0.7` requieren aprobación humana.
+4. `memory_consolidation_apply` con `confirmed=true` hace backup, upsert, soft
+   delete de los originales con `merged_into`, fila en el execution log y
+   verificación.
+5. `memory_consolidation_verify` comprueba 5-10 consultas reales.
+
+El agente `memory-consolidator` solo propone JSON; no edita, no borra y no
+ejecuta cambios. La política completa está en `skills/factory-memory/SKILL.md`.
 
 ## Modo por fases
 
@@ -436,7 +474,7 @@ archivo fuera de `files_owned`.
 | `factory_agents_*` | Selección de agentes manual/híbrida/auto y recomendación determinística. | `factory_agents_apply` actualiza las reglas `subagent` de la sesión; exige `confirmed=true`. |
 | `budget_list`, `budget_set`, `executions_list`, `model_history` | Presupuestos, execution log y evaluación de modelos. | `budget_set` exige `confirmed=true`; las reservas/liquidaciones de `subtask_run`/`review_run` son atómicas en PostgreSQL. |
 | `factory_doctor` | `--version` de escáneres, consultas a PostgreSQL y worktrees. | Sin escritura. |
-| `memory_*` | PostgreSQL + Ollama, si `opencode-memory` está instalado. | Fuera de este repo. |
+| `memory_*` | PostgreSQL + Ollama, si `opencode-memory` está instalado. | `memory_upsert` decide NOOP/UPDATE/CREATE; `memory_consolidation_apply` exige `confirmed=true` y aprobación si hay conflictos o baja confianza. |
 
 Detalles:
 

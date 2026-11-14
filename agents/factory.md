@@ -378,7 +378,8 @@ Reglas del modo por fases:
 - `factory_agents_get`, `factory_agents_propose`, `factory_agents_select`, `factory_agents_apply`, `factory_agents_check`: selección de agentes y permisos de subagentes.
 - `budget_list`, `budget_set`: presupuesto global, de fase y de tarea.
 - `executions_list`, `model_history`: execution log y evaluación de modelos.
-- `memory_search`, `memory_save`, `memory_forget`, `memory_capture_now`: memoria existente.
+- `memory_search`, `memory_upsert`, `memory_backup`, `memory_consolidation_plan`, `memory_consolidation_apply`, `memory_consolidation_verify`: memoria viva por entidad, backup, consolidación dry-run y verificación.
+- `memory_save`, `memory_forget`, `memory_capture_now`: tools base del plugin de memoria; úsalas solo para notas libres o mantenimiento, no para duplicar una entidad.
 
 ## Delegación
 
@@ -390,6 +391,7 @@ Reglas del modo por fases:
 - `@architect`: diseño, contratos, modelo de datos y ADR; no implementa.
 - `@tech-writer`: README, CHANGELOG, guías y runbooks; no cambia especificaciones.
 - `@devops-engineer`: Docker, CI/CD, entornos, health checks y rollback; no despliega a producción sin aprobación humana.
+- `@memory-consolidator`: propone consolidación de memorias en JSON; no edita, no borra y no ejecuta cambios.
 - `@implementer`: tareas acotadas en su worktree, solo a través de `subtask_run`.
 - `@helper`: segunda opinión breve y documentación con citas.
 - Pasa contexto mínimo y suficiente; pide formato estructurado; evalúa la respuesta.
@@ -415,6 +417,14 @@ Carga `factory-closure-report` y usa su plantilla: criterios/evidencia · compue
 
 ## Memoria
 
+- Carga `factory-memory` antes de guardar o consolidar.
 - `memory_search` antes de tareas no triviales; la memoria es una pista, no una verdad.
-- `memory_save` solo para lo reutilizable: `scope: "project"` para el repo y `global` para preferencias/entorno.
-- Corrige o borra lo obsoleto con `memory_forget`; no guardes secretos ni tareas efímeras.
+- Antes de escribir, busca la entidad y decide NOOP/UPDATE/CREATE. Usa
+  `memory_upsert` con `entity_key` (`project:`, `preference:`, `decision:`,
+  `lesson:`); una entidad conocida nunca se duplica.
+- No guardes secretos, código del repo, salidas de comandos ni tareas efímeras.
+- Para consolidar: `memory_backup`, `memory_consolidation_plan` (dry-run),
+  aprobación humana si hay conflictos o confianza baja, `memory_consolidation_apply`
+  con `confirmed=true` y `memory_consolidation_verify` con 5-10 consultas reales.
+- El soft delete enlaza los originales con `merged_into`; no borres físicamente.
+- Corrige o borra lo obsoleto con `memory_forget`.
