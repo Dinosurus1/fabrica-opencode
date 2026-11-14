@@ -30,6 +30,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await response.text().catch(() => "");
     throw new Error(`${response.status} ${response.statusText}: ${body.slice(0, 240)}`);
   }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
@@ -70,15 +71,25 @@ export const api = {
   session: (id: string) =>
     request<{ data: Session }>(`/api/session/${encodeURIComponent(id)}`).then((value) => value.data),
 
+  activeSessions: () =>
+    request<{ data: Record<string, { type?: string }> }>("/api/session/active").then((value) => value.data ?? {}),
+
   sessionContext: (id: string) =>
     request<{ data: SessionMessage[] }>(`/api/session/${encodeURIComponent(id)}/context`).then((value) =>
       unwrapList<SessionMessage>(value),
     ),
 
-  prompt: (id: string, text: string) =>
+  deleteSession: (id: string) =>
+    request<void>(`/api/session/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  prompt: (
+    id: string,
+    text: string,
+    files?: Array<{ uri: string; name?: string; description?: string }>,
+  ) =>
     request(`/api/session/${encodeURIComponent(id)}/prompt`, {
       method: "POST",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, ...(files?.length ? { files } : {}) }),
     }),
 
   switchAgent: (id: string, agent: string) =>

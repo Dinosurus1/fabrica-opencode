@@ -1,33 +1,34 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
-  ArrowUpRight,
-  Bot,
+  ArrowRight,
   CircleStop,
-  Cpu,
   MessageSquarePlus,
   MessagesSquare,
+  Plus,
+  RefreshCw,
   Send,
-  User,
+  Settings2,
+  Trash2,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useProject } from "../components/ProjectContext";
+import type { PendingAttachment } from "../components/sessions/attachments";
 import {
-  Badge,
-  Button,
-  Card,
-  EmptyState,
-  ErrorState,
-  Field,
-  Modal,
-  PageHeader,
-  Section,
-  Spinner,
-} from "../components/ui";
+  AttachmentButton,
+  AttachmentChips,
+  filesFromClipboard,
+  useFileAttachments,
+} from "../components/sessions/attachments";
+import { SessionList } from "../components/sessions/SessionList";
+import { messageText, Transcript } from "../components/sessions/Transcript";
+import { useProject } from "../components/ProjectContext";
+import { Button, ConfirmDialog, Field, Modal } from "../components/ui";
 import { api } from "../lib/api";
-import { cn, formatCompact, formatDate, formatUsd, modelLabel, relativeTime, shortPath, statusClass } from "../lib/format";
+import { useSessionEvents, runningSessionIds } from "../lib/events";
+import { cn, formatCompact, formatUsd, relativeTime, shortPath } from "../lib/format";
 import { rpc } from "../lib/rpc";
-import type { CatalogModel, Session, SessionMessage } from "../lib/types";
+import type { CatalogModel, PromptFileAttachment, Session, SessionMessage } from "../lib/types";
 
 interface NewChatDraft {
   title: string;
@@ -36,20 +37,63 @@ interface NewChatDraft {
   prompt: string;
 }
 
+interface NewChatRequest extends NewChatDraft {
+  files: PendingAttachment[];
+}
+
+interface OptimisticMessage {
+  text: string;
+  createdAt: number;
+  files: PromptFileAttachment[];
+}
+
+function toPromptFiles(files: PendingAttachment[]): PromptFileAttachment[] {
+  return files.map((file) => {
+    const [, data = ""] = file.dataUrl.split(",");
+    return { data, mime: file.mime, name: file.name, source: { type: "inline" as const } };
+  });
+}
+
+function toPromptInputFiles(files: PendingAttachment[]) {
+  return files.map((file) => ({ uri: file.dataUrl, name: file.name }));
+}
+
+const STREAM_EVENTS = new Set([
+  "session.text.started",
+  "session.text.delta",
+  "session.text.ended",
+  "session.reasoning.started",
+  "session.reasoning.delta",
+  "session.reasoning.ended",
+  "session.tool.input.started",
+  "session.tool.input.ended",
+  "session.tool.called",
+  "session.tool.progress",
+  "session.tool.success",
+  "session.tool.failed",
+  "session.step.started",
+  "session.step.streamed",
+  "session.step.ended",
+  "session.step.failed",
+  "session.retry.scheduled",
+  "session.compaction.started",
+  "session.compaction.ended",
+  "session.compaction.failed",
+]);
+
+const TERMINAL_EVENTS = new Set([
+  "session.idle",
+  "session.execution.succeeded",
+  "session.execution.failed",
+  "session.execution.interrupted",
+]);
+
 function sessionTotalTokens(session: Session): number {
   return (session.tokens.input ?? 0) + (session.tokens.output ?? 0) + (session.tokens.reasoning ?? 0);
 }
 
 function isTemporaryDirectory(directory?: string): boolean {
   return Boolean(directory && (directory.startsWith("/tmp/") || directory.includes("/worktrees/")));
-}
-
-function messageText(message: SessionMessage): string {
-  const parts = (message.content ?? [])
-    .filter((part) => part.type === "text" && part.text)
-    .map((part) => part.text!.trim())
-    .filter(Boolean);
-  return (parts.join("\n") || message.text || "").trim();
 }
 
 function truncate(value: string, max: number): string {
@@ -70,7 +114,7 @@ function lastContextTokens(messages: SessionMessage[]): number {
 function buildHandoffPrompt(session: Session, messages: SessionMessage[]): string {
   const userMessages = messages
     .filter((message) => message.type === "user")
-    .map((message) => truncate(messageText(message), 500))
+    .map((message) => truncate(messageText(message), 600))
     .filter(Boolean)
     .slice(-8);
   const lastAssistant = [...messages]
@@ -83,7 +127,7 @@ function buildHandoffPrompt(session: Session, messages: SessionMessage[]): strin
       ? `Pedidos recientes:\n${userMessages.map((text) => `- ${text}`).join("\n")}`
       : "",
     lastAssistant
-      ? `Último estado reportado por el asistente:\n${truncate(messageText(lastAssistant), 1800)}`
+      ? `Último estado reportado por el asistente:\n${truncate(messageText(lastAssistant), 2000)}`
       : "",
     "Continúa desde este punto. Antes de actuar, revisa el estado actual del repositorio y la memoria del proyecto; no repitas trabajo ya hecho. Si falta contexto, pide solo lo mínimo necesario y evita arrastrar el historial completo.",
   ];
@@ -91,60 +135,193 @@ function buildHandoffPrompt(session: Session, messages: SessionMessage[]): strin
 }
 
 export function SessionsPage() {
-  const { projects, projectId, project } = useProject();
+  const { projectId, project } = useProject();
   const directory = project?.canonical;
+  const queryClient = useQueryClient();
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
   const [onlyProject, setOnlyProject] = useState(false);
   const [showSubagents, setShowSubagents] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [listOpen, setListOpen] = useState(true);
   const [agent, setAgent] = useState("");
   const [model, setModel] = useState("");
   const [prompt, setPrompt] = useState("");
   const [newChat, setNewChat] = useState<NewChatDraft | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const queryClient = useQueryClient();
+  const [pendingRun, setPendingRun] = useState(false);
+  const [optimistic, setOptimistic] = useState<OptimisticMessage | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const attachments = useFileAttachments();
+  const draftAttachments = useFileAttachments();
+  const didInit = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const selectedRef = useRef<string | null>(null);
+  const listTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const contextTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  const sessions = useQuery({ queryKey: ["opencode", "sessions"], queryFn: () => api.sessions(500) });
-  const agents = useQuery({ queryKey: ["opencode", "agents", directory ?? "default"], queryFn: () => api.agents(directory) });
+  selectedRef.current = selectedId;
+
+  const sessions = useQuery({
+    queryKey: ["opencode", "sessions"],
+    queryFn: () => api.sessions(500),
+    refetchInterval: 25_000,
+    refetchOnWindowFocus: true,
+    staleTime: 5_000,
+  });
+  const active = useQuery({
+    queryKey: ["opencode", "active-sessions"],
+    queryFn: api.activeSessions,
+    refetchInterval: 4_000,
+    refetchOnWindowFocus: true,
+    staleTime: 1_000,
+  });
+  const agents = useQuery({
+    queryKey: ["opencode", "agents", directory ?? "default"],
+    queryFn: () => api.agents(directory),
+  });
   const models = useQuery({
     queryKey: ["factory", "models", directory ?? "default"],
     queryFn: () => rpc<{ count: number; models: CatalogModel[] }>("models.list", { limit: 2000 }, directory),
   });
+
+  const selected = sessions.data?.find((session) => session.id === selectedId) ?? null;
+  const runningIds = useMemo(
+    () => runningSessionIds(active.data, sessions.data ?? []),
+    [active.data, sessions.data],
+  );
+  const running = Boolean(selectedId && (runningIds.has(selectedId) || pendingRun));
+
   const context = useQuery({
     queryKey: ["opencode", "session-context", selectedId],
     queryFn: () => api.sessionContext(selectedId!),
     enabled: Boolean(selectedId),
+    refetchInterval: running ? 2_000 : false,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+  });
+
+  const invalidateSessions = (delay = 400) => {
+    if (listTimer.current) clearTimeout(listTimer.current);
+    listTimer.current = setTimeout(() => {
+      void queryClient.invalidateQueries({ queryKey: ["opencode", "sessions"] });
+      void queryClient.invalidateQueries({ queryKey: ["opencode", "active-sessions"] });
+    }, delay);
+  };
+
+  const invalidateContext = (delay = 250) => {
+    if (contextTimer.current) clearTimeout(contextTimer.current);
+    contextTimer.current = setTimeout(() => {
+      const id = selectedRef.current;
+      if (id) void queryClient.invalidateQueries({ queryKey: ["opencode", "session-context", id] });
+    }, delay);
+  };
+
+  const live = useSessionEvents((event) => {
+    const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : undefined;
+    const streaming = STREAM_EVENTS.has(event.type);
+    if (event.type.startsWith("session.") && !streaming) invalidateSessions(600);
+    if (!sessionID || sessionID !== selectedRef.current) return;
+
+    if (TERMINAL_EVENTS.has(event.type)) {
+      setPendingRun(false);
+      invalidateContext(0);
+      return;
+    }
+    if (event.type === "session.execution.started") {
+      setPendingRun(true);
+      invalidateContext(300);
+      return;
+    }
+    if (streaming) {
+      setPendingRun(true);
+      invalidateContext(900);
+    }
   });
 
   const filtered = useMemo(() => {
-    const list = sessions.data ?? [];
-    return list
+    const text = query.trim().toLowerCase();
+    return (sessions.data ?? [])
       .filter((session) => !isTemporaryDirectory(session.location?.directory))
       .filter((session) => {
         if (onlyProject && session.projectID !== projectId) return false;
         if (session.parentID) return showSubagents;
         return Boolean(session.agent) && Boolean(session.title?.trim());
       })
+      .filter((session) => {
+        if (!text) return true;
+        return `${session.title ?? ""} ${session.id} ${session.agent} ${session.model?.providerID ?? ""} ${session.model?.id ?? ""} ${session.location?.directory ?? ""}`
+          .toLowerCase()
+          .includes(text);
+      })
       .sort((left, right) => right.time.updated - left.time.updated);
-  }, [sessions.data, onlyProject, projectId, showSubagents]);
-
-  const selected = filtered.find((session) => session.id === selectedId) ?? null;
+  }, [sessions.data, onlyProject, projectId, query, showSubagents]);
 
   useEffect(() => {
     if (!selected) return;
-    setAgent(selected.agent);
+    setAgent(selected.agent ?? "");
     setModel(selected.model ? `${selected.model.providerID}/${selected.model.id}` : "");
-  }, [selected?.id]);
+  }, [selected?.id, selected?.agent, selected?.model?.id, selected?.model?.providerID]);
 
-  const refreshSession = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["opencode", "sessions"] }),
-      queryClient.invalidateQueries({ queryKey: ["opencode", "session-context", selectedId] }),
-    ]);
-  };
+  useEffect(() => {
+    if (didInit.current || !sessions.data) return;
+    didInit.current = true;
+    if (selectedId) return;
+    const first = filtered[0]?.id ?? null;
+    if (first) {
+      setSelectedId(first);
+      setListOpen(false);
+    }
+  }, [sessions.data, filtered, selectedId]);
+
+  useEffect(() => {
+    if (!selectedId || !sessions.data) return;
+    if (sessions.data.some((session) => session.id === selectedId)) return;
+    setSelectedId(filtered[0]?.id ?? null);
+  }, [sessions.data, selectedId, filtered]);
+
+  useEffect(() => {
+    if (!optimistic) return;
+    const found = (context.data ?? []).some((message) => {
+      if (message.type !== "user" || messageText(message) !== optimistic.text) return false;
+      if (optimistic.files.length === 0) return true;
+      const names = new Set((message.files ?? []).map((file) => file.name ?? ""));
+      return optimistic.files.every((file) => names.has(file.name ?? ""));
+    });
+    if (found) setOptimistic(null);
+  }, [context.data, optimistic]);
+
+  useEffect(() => {
+    const node = textareaRef.current;
+    if (!node) return;
+    node.style.height = "auto";
+    node.style.height = `${Math.min(node.scrollHeight, 220)}px`;
+  }, [prompt]);
+
+  useEffect(() => {
+    if (!pendingRun) return;
+    const timer = setTimeout(() => setPendingRun(false), 120_000);
+    return () => clearTimeout(timer);
+  }, [pendingRun]);
+
+  useEffect(() => {
+    if (!optimistic) return;
+    const timer = setTimeout(() => setOptimistic(null), 20_000);
+    return () => clearTimeout(timer);
+  }, [optimistic]);
+
+  useEffect(() => {
+    return () => {
+      if (listTimer.current) clearTimeout(listTimer.current);
+      if (contextTimer.current) clearTimeout(contextTimer.current);
+    };
+  }, []);
 
   const switchAgent = useMutation({
     mutationFn: (nextAgent: string) => api.switchAgent(selectedId!, nextAgent),
-    onSuccess: refreshSession,
+    onSuccess: () => invalidateContext(0),
+    onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
   });
 
   const switchModel = useMutation({
@@ -155,24 +332,69 @@ export function SessionsPage() {
         id: ref.slice(slash + 1),
       });
     },
-    onSuccess: refreshSession,
+    onSuccess: () => invalidateContext(0),
+    onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
   });
 
   const send = useMutation({
-    mutationFn: () => api.prompt(selectedId!, prompt.trim()),
-    onSuccess: async () => {
+    mutationFn: ({ text, files }: { text: string; files: PendingAttachment[] }) =>
+      api.prompt(selectedId!, text, toPromptInputFiles(files)),
+    onMutate: ({ text, files }) => {
+      setNotice(null);
+      setPendingRun(true);
+      setOptimistic({ text, createdAt: Date.now(), files: toPromptFiles(files) });
+    },
+    onSuccess: () => {
       setPrompt("");
-      await refreshSession();
+      attachments.clear();
+      invalidateContext(0);
+    },
+    onError: (error) => {
+      setOptimistic(null);
+      setPendingRun(false);
+      setNotice(error instanceof Error ? error.message : String(error));
+    },
+  });
+
+  const deleteSession = useMutation({
+    mutationFn: (id: string) => api.deleteSession(id),
+    onSuccess: (_result, id) => {
+      setDeleteTarget(null);
+      queryClient.setQueryData(["opencode", "sessions"], (current: Session[] | undefined) =>
+        (current ?? []).filter((session) => session.id !== id),
+      );
+      queryClient.removeQueries({ queryKey: ["opencode", "session-context", id] });
+      if (selectedId === id) {
+        setSelectedId(null);
+        setPrompt("");
+        setOptimistic(null);
+        attachments.clear();
+      }
+      invalidateSessions(0);
+    },
+    onError: (error) => {
+      setDeleteTarget(null);
+      setNotice(error instanceof Error ? error.message : String(error));
     },
   });
 
   const interrupt = useMutation({
     mutationFn: () => api.interrupt(selectedId!),
-    onSuccess: refreshSession,
+    onSuccess: () => {
+      setPendingRun(false);
+      invalidateContext(0);
+    },
+    onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
   });
 
+  const refresh = () => {
+    void sessions.refetch();
+    void active.refetch();
+    if (selectedId) void queryClient.invalidateQueries({ queryKey: ["opencode", "session-context", selectedId] });
+  };
+
   const createChat = useMutation({
-    mutationFn: async (draft: NewChatDraft) => {
+    mutationFn: async (draft: NewChatRequest) => {
       const slash = draft.model.indexOf("/");
       const created = await api.createSession({
         title: draft.title.trim() || truncate(draft.prompt.trim(), 60) || "Nueva sesión",
@@ -184,18 +406,21 @@ export function SessionsPage() {
         directory,
       });
       let promptError: string | null = null;
-      if (draft.prompt.trim()) {
+      if (draft.prompt.trim() || draft.files.length > 0) {
         try {
-          await api.prompt(created.id, draft.prompt.trim());
+          await api.prompt(created.id, draft.prompt.trim(), toPromptInputFiles(draft.files));
         } catch (error) {
           promptError = error instanceof Error ? error.message : String(error);
         }
       }
-      return { created, promptError };
+      return { created, promptError, prompted: Boolean(draft.prompt.trim() || draft.files.length) };
     },
-    onSuccess: async ({ created, promptError }) => {
+    onSuccess: async ({ created, promptError, prompted }) => {
       setNewChat(null);
+      draftAttachments.clear();
       setSelectedId(created.id);
+      setListOpen(false);
+      setPendingRun(prompted && !promptError);
       setNotice(promptError ? `Sesión creada, pero el primer prompt falló: ${promptError}` : null);
       queryClient.setQueryData(["opencode", "sessions"], (current: Session[] | undefined) => [
         created,
@@ -203,6 +428,7 @@ export function SessionsPage() {
       ]);
       await queryClient.invalidateQueries({ queryKey: ["opencode", "sessions"] });
     },
+    onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
   });
 
   const modelsByProvider = useMemo(() => {
@@ -232,17 +458,35 @@ export function SessionsPage() {
       )?.contextLimit ?? null,
     [models.data, selected?.model?.id, selected?.model?.providerID],
   );
+  const contextRatio =
+    contextLimit && contextTokens > 0 ? Math.min(100, Math.round((contextTokens / contextLimit) * 100)) : 0;
   const longSession = Boolean(
     selected &&
-      (sessionTotalTokens(selected) >= 2_000_000 ||
-        (contextLimit !== null && contextLimit > 0 && contextTokens >= contextLimit * 0.6)),
+      (sessionTotalTokens(selected) >= 2_000_000 || (contextLimit !== null && contextLimit > 0 && contextTokens >= contextLimit * 0.6)),
   );
+
+  const transcript = useMemo(() => {
+    const messages = context.data ?? [];
+    if (!optimistic) return messages;
+    const alreadyThere = messages.some(
+      (message) => message.type === "user" && messageText(message) === optimistic.text,
+    );
+    if (alreadyThere) return messages;
+    const pending: SessionMessage = {
+      id: `pending-${optimistic.createdAt}`,
+      type: "user",
+      text: optimistic.text,
+      time: { created: optimistic.createdAt },
+    };
+    return [...messages, pending];
+  }, [context.data, optimistic]);
 
   const defaultChatAgent = (session: Session | null) =>
     chatAgents.find((item) => item.id === session?.agent)?.id ?? chatAgents[0]?.id ?? "factory";
 
   const openNewChat = () => {
     setNotice(null);
+    draftAttachments.clear();
     setNewChat({
       title: "",
       agent: defaultChatAgent(selected),
@@ -254,6 +498,7 @@ export function SessionsPage() {
   const openContinuation = () => {
     if (!selected) return;
     setNotice(null);
+    draftAttachments.clear();
     setNewChat({
       title: truncate(`Continuación · ${selected.title ?? selected.id}`, 90),
       agent: defaultChatAgent(selected),
@@ -262,266 +507,399 @@ export function SessionsPage() {
     });
   };
 
-  const error = sessions.error ?? agents.error ?? models.error ?? context.error;
+  const selectSession = (id: string) => {
+    setSelectedId(id);
+    setNotice(null);
+    setOptimistic(null);
+    setPrompt("");
+    attachments.clear();
+    setListOpen(false);
+  };
 
+  const sendPrompt = () => {
+    const text = prompt.trim();
+    if ((!text && attachments.files.length === 0) || send.isPending || attachments.reading) return;
+    send.mutate({ text, files: attachments.files });
+  };
+
+  const liveTone = live.status === "live" ? "live" : live.status === "offline" ? "offline" : "connecting";
+  const liveLabel =
+    live.status === "live"
+      ? "En vivo"
+      : live.status === "offline"
+        ? "Sin conexión"
+        : live.status === "reconnecting"
+          ? "Reconectando…"
+          : "Conectando…";
+
+  const totalSessions = filtered.length;
   return (
-    <div className="space-y-5">
-      <PageHeader
-        title="Sessions"
-        subtitle="Conversaciones y ejecuciones de OpenCode. Crea chats nuevos, abre una sesión, cambia agente o modelo, envía un prompt e interrumpe."
-        actions={
-          <div className="flex flex-wrap items-center gap-3">
-            <Button variant="primary" className="h-8 px-3 text-xs" onClick={openNewChat}>
-              <MessageSquarePlus size={13} /> Nuevo chat
-            </Button>
-            <label className="flex items-center gap-2 text-xs text-muted">
-              <input
-                type="checkbox"
-                className="size-3.5 accent-[#7c5cff]"
-                checked={onlyProject}
-                onChange={(event) => setOnlyProject(event.target.checked)}
-              />
-              Solo {project ? shortPath(project.canonical) : "proyecto actual"}
-            </label>
-            <label className="flex items-center gap-2 text-xs text-muted">
-              <input
-                type="checkbox"
-                className="size-3.5 accent-[#7c5cff]"
-                checked={showSubagents}
-                onChange={(event) => setShowSubagents(event.target.checked)}
-              />
-              Subagentes
-            </label>
-          </div>
-        }
-      />
-
-      {notice ? (
-        <div className="rounded-lg border border-violet/30 bg-violet/10 px-3 py-2 text-xs text-violet-soft">{notice}</div>
+    <div className="flex h-[calc(100dvh-6.5rem)] gap-3">
+      {listOpen ? (
+        <div
+          className="fixed inset-0 z-30 bg-black/60 lg:hidden"
+          onClick={() => setListOpen(false)}
+          aria-hidden="true"
+        />
       ) : null}
 
-      {error ? <ErrorState error={error} onRetry={() => void sessions.refetch()} /> : null}
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-40 flex w-[86vw] max-w-[330px] flex-col border-r border-line bg-carbon-900 transition-transform duration-200 lg:static lg:z-auto lg:w-[300px] lg:max-w-none lg:shrink-0 lg:translate-x-0 lg:rounded-xl lg:border lg:border-line-soft",
+          listOpen ? "translate-x-0" : "-translate-x-full",
+        )}
+      >
+        <SessionList
+          sessions={filtered}
+          runningIds={runningIds}
+          selectedId={selectedId}
+          loading={sessions.isLoading}
+          liveLabel={liveLabel}
+          liveTone={liveTone}
+          query={query}
+          onQueryChange={setQuery}
+          onlyProject={onlyProject}
+          onOnlyProjectChange={setOnlyProject}
+          showSubagents={showSubagents}
+          onShowSubagentsChange={setShowSubagents}
+          onSelect={selectSession}
+          onDelete={setDeleteTarget}
+          onNewChat={openNewChat}
+          onRetry={() => void sessions.refetch()}
+          error={sessions.error}
+          projectLabel={project ? shortPath(project.canonical) : undefined}
+        />
+      </aside>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(380px,0.8fr)]">
-        <Section
-          className="min-w-0"
-          title="Recientes"
-          description={`${filtered.length} sesiones · actualizado ${relativeTime(new Date().toISOString())}`}
-        >
-          {sessions.isLoading ? (
-            <div className="p-6">
-              <Spinner />
+      <section className="surface flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {!selected ? (
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
+            <div className="mb-3 grid size-12 place-items-center rounded-2xl border border-violet/30 bg-violet/10 text-violet-soft">
+              <MessagesSquare size={22} />
             </div>
-          ) : filtered.length === 0 ? (
-            <EmptyState
-              icon={<MessagesSquare size={26} />}
-              title="Sin sesiones"
-              description="No hay sesiones para el filtro actual."
-            />
-          ) : (
-            <div className="max-h-[680px] overflow-auto">
-              <table className="w-full border-collapse text-left">
-                <thead className="sticky top-0 z-10 bg-carbon-850">
-                  <tr>
-                    <th className="table-head px-4 py-2.5">Sesión</th>
-                    <th className="table-head px-4 py-2.5">Agente</th>
-                    <th className="table-head px-4 py-2.5">Modelo</th>
-                    <th className="table-head px-4 py-2.5">Coste</th>
-                    <th className="table-head px-4 py-2.5">Actualizada</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((session) => (
-                    <tr
-                      key={session.id}
+            <h2 className="text-base font-semibold text-ink">Elige una conversación</h2>
+            <p className="mt-1 max-w-sm text-xs leading-5 text-muted">
+              Abre una sesión existente o crea un chat nuevo. El historial y el estado se actualizan en
+              tiempo real.
+            </p>
+            <div className="mt-5 flex items-center gap-2">
+              <Button variant="primary" onClick={openNewChat}>
+                <MessageSquarePlus size={14} /> Nuevo chat
+              </Button>
+              <Button variant="ghost" className="lg:hidden" onClick={() => setListOpen(true)}>
+                <MessagesSquare size={14} /> Ver sesiones ({totalSessions})
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <header className="flex items-start gap-2.5 border-b border-line-soft px-3 py-2.5 lg:gap-3 lg:px-4 lg:py-3">
+              <button
+                className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg border border-line bg-carbon-900 text-muted hover:text-ink lg:hidden"
+                onClick={() => setListOpen(true)}
+                aria-label="Abrir lista de sesiones"
+              >
+                <MessagesSquare size={15} />
+              </button>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <h2 className="truncate text-sm font-semibold text-ink">
+                    {selected.title ?? selected.id}
+                  </h2>
+                  {selected.parentID ? (
+                    <span className="rounded border border-line px-1 py-px text-[9px] uppercase tracking-wide text-faint">
+                      subagente
+                    </span>
+                  ) : null}
+                  <span
+                    className={cn(
+                      "ml-1 inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium",
+                      liveTone === "live"
+                        ? "border-success/25 bg-success/10 text-success"
+                        : liveTone === "connecting"
+                          ? "border-warning/25 bg-warning/10 text-warning"
+                          : "border-danger/25 bg-danger/10 text-danger",
+                    )}
+                  >
+                    <span
                       className={cn(
-                        "table-row cursor-pointer",
-                        selectedId === session.id ? "bg-violet/10" : undefined,
+                        "size-1.5 rounded-full",
+                        liveTone === "live" ? "bg-success" : liveTone === "connecting" ? "bg-warning" : "bg-danger",
                       )}
-                      onClick={() => setSelectedId(session.id)}
-                    >
-                      <td className="max-w-[240px] px-4 py-3">
-                        <div className="truncate text-xs font-medium text-ink">
-                          {session.title ?? session.id}
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-2 text-[10px] text-faint">
-                          <span className="font-mono">{session.id.slice(0, 12)}…</span>
-                          <span>{shortPath(session.location?.directory)}</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5 text-[11px] text-muted">
-                          <Bot size={12} />
-                          {session.agent}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 font-mono text-[10px] text-muted">
-                        {modelLabel(session.model?.providerID, session.model?.id)}
-                      </td>
-                      <td className="px-4 py-3 text-[11px] text-muted">{formatUsd(session.cost)}</td>
-                      <td className="px-4 py-3 text-[11px] text-muted">
-                        <div>{relativeTime(session.time.updated)}</div>
-                        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-faint">
-                          <span>{formatCompact(sessionTotalTokens(session))} tok</span>
-                          {sessionTotalTokens(session) >= 2_000_000 ? <Badge tone="warning">larga</Badge> : null}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Section>
-
-        <Card className="flex min-h-[520px] min-w-0 flex-col overflow-hidden xl:max-h-[calc(100vh-180px)]">
-          {!selected ? (
-            <EmptyState
-              icon={<MessagesSquare size={26} />}
-              title="Selecciona una sesión"
-              description="Abre una conversación para ver mensajes y controlar el agente, el modelo y el prompt."
-            />
-          ) : (
-            <>
-              <div className="border-b border-line-soft px-4 py-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="line-clamp-2 break-words text-sm font-semibold text-ink">{selected.title ?? selected.id}</div>
-                    <div className="mt-0.5 flex items-center gap-2 text-[10px] text-faint">
-                      <span className="font-mono">{selected.id}</span>
-                      {selected.outcome ? (
-                        <span className={cn("badge", statusClass(selected.outcome))}>{selected.outcome}</span>
-                      ) : null}
-                    </div>
-                  </div>
+                    />
+                    {running ? "Trabajando" : liveLabel}
+                  </span>
+                </div>
+                <div className="mt-1 hidden flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-faint sm:flex">
+                  <span className="font-mono">{selected.id.slice(0, 16)}…</span>
+                  <span className="text-line">·</span>
+                  <span className="truncate">{shortPath(selected.location?.directory)}</span>
+                  <span className="text-line">·</span>
+                  <span>{formatCompact(sessionTotalTokens(selected))} tok</span>
+                  <span className="text-line">·</span>
+                  <span>{formatUsd(selected.cost)}</span>
+                  <span className="text-line">·</span>
+                  <span>activa {relativeTime(selected.time.updated)}</span>
+                </div>
+                <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-faint sm:hidden">
+                  <span className="truncate">{selected.agent}</span>
+                  <span className="text-line">·</span>
+                  <span className="truncate font-mono">{selected.model?.id ?? "modelo"}</span>
+                  <span className="text-line">·</span>
+                  <span>{relativeTime(selected.time.updated)}</span>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <button
+                  className="hidden size-8 place-items-center rounded-lg border border-line bg-carbon-900 text-muted transition-colors hover:text-ink disabled:opacity-40 sm:grid"
+                  onClick={refresh}
+                  title="Actualizar ahora"
+                  disabled={sessions.isFetching || context.isFetching}
+                >
+                  <RefreshCw size={14} className={cn(sessions.isFetching || context.isFetching ? "animate-spin" : undefined)} />
+                </button>
+                <button
+                  className="hidden size-8 place-items-center rounded-lg border border-line bg-carbon-900 text-muted transition-colors hover:text-ink sm:grid"
+                  onClick={openNewChat}
+                  title="Nuevo chat"
+                >
+                  <Plus size={15} />
+                </button>
+                <button
+                  className="grid size-8 place-items-center rounded-lg border border-line bg-carbon-900 text-muted transition-colors hover:border-danger/40 hover:text-danger"
+                  onClick={() => setDeleteTarget(selected)}
+                  title="Eliminar chat"
+                >
+                  <Trash2 size={14} />
+                </button>
+                {running ? (
                   <Button
                     variant="danger"
+                    className="h-8 px-2 text-xs sm:px-2.5"
                     onClick={() => interrupt.mutate()}
                     disabled={interrupt.isPending}
                     title="Interrumpir la ejecución"
                   >
-                    <CircleStop size={14} /> Interrumpir
+                    <CircleStop size={13} /> <span className="hidden sm:inline">Detener</span>
                   </Button>
-                </div>
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  <label className="text-[10px] text-faint">
-                    Agente
-                    <select
-                      className="field mt-1 h-8 text-xs"
-                      value={agent}
-                      onChange={(event) => {
-                        setAgent(event.target.value);
-                        switchAgent.mutate(event.target.value);
-                      }}
-                    >
-                      {(agents.data ?? []).map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.id} ({item.mode})
+                ) : null}
+              </div>
+            </header>
+
+            <div className="grid grid-cols-2 gap-2 border-b border-line-soft bg-carbon-950/40 px-3 py-2 sm:flex sm:flex-wrap sm:items-center lg:px-4">
+              <label className="flex min-w-0 items-center gap-1.5 text-[10px] text-faint">
+                <Settings2 size={11} className="hidden shrink-0 sm:block" />
+                <select
+                  className="h-7 w-full min-w-0 rounded-md border border-line bg-carbon-900 px-2 text-[11px] text-ink outline-none focus:border-violet sm:max-w-[170px]"
+                  value={agent}
+                  onChange={(event) => {
+                    setAgent(event.target.value);
+                    switchAgent.mutate(event.target.value);
+                  }}
+                  title="Agente de la sesión"
+                >
+                  {(agents.data ?? []).map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.id} ({item.mode})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex min-w-0 items-center gap-1.5 text-[10px] text-faint">
+                <span className="hidden shrink-0 font-mono sm:inline">modelo</span>
+                <select
+                  className="h-7 w-full min-w-0 rounded-md border border-line bg-carbon-900 px-2 font-mono text-[10px] text-ink outline-none focus:border-violet sm:max-w-[240px]"
+                  value={model}
+                  onChange={(event) => {
+                    setModel(event.target.value);
+                    switchModel.mutate(event.target.value);
+                  }}
+                  title="Modelo de la sesión"
+                >
+                  {model &&
+                  !(modelsByProvider ?? []).some(([, list]) =>
+                    list.some((item) => `${item.providerId}/${item.modelId}` === model),
+                  ) ? (
+                    <option value={model}>{model}</option>
+                  ) : null}
+                  {modelsByProvider.map(([provider, list]) => (
+                    <optgroup key={provider} label={provider}>
+                      {list.map((item) => (
+                        <option key={`${provider}/${item.modelId}`} value={`${provider}/${item.modelId}`}>
+                          {item.name ?? item.modelId}
                         </option>
                       ))}
-                    </select>
-                  </label>
-                  <label className="text-[10px] text-faint">
-                    Modelo
-                    <select
-                      className="field mt-1 h-8 text-xs"
-                      value={model}
-                      onChange={(event) => {
-                        setModel(event.target.value);
-                        switchModel.mutate(event.target.value);
-                      }}
-                    >
-                      {modelsByProvider.map(([provider, list]) => (
-                        <optgroup key={provider} label={provider}>
-                          {list.map((item) => (
-                            <option key={`${provider}/${item.modelId}`} value={`${provider}/${item.modelId}`}>
-                              {item.name ?? item.modelId}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))}
-                    </select>
-                  </label>
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
+              {contextLimit ? (
+                <div
+                  className="col-span-2 flex min-w-0 items-center gap-2 sm:col-span-1 sm:ml-auto sm:min-w-[160px]"
+                  title="Contexto usado por la sesión"
+                >
+                  <div className="h-1 flex-1 overflow-hidden rounded-full bg-carbon-800 sm:w-24 sm:flex-none">
+                    <div
+                      className={cn(
+                        "h-full rounded-full",
+                        contextRatio >= 85 ? "bg-danger" : contextRatio >= 60 ? "bg-warning" : "bg-violet",
+                      )}
+                      style={{ width: `${Math.max(contextRatio, contextTokens > 0 ? 3 : 0)}%` }}
+                    />
+                  </div>
+                  <span
+                    className={cn(
+                      "shrink-0 whitespace-nowrap text-[10px] tabular-nums",
+                      contextRatio >= 85 ? "text-danger" : contextRatio >= 60 ? "text-warning" : "text-faint",
+                    )}
+                  >
+                    {formatCompact(contextTokens)} / {formatCompact(contextLimit)}
+                  </span>
                 </div>
-              </div>
+              ) : null}
+            </div>
 
-              {longSession ? (
-                <div className="border-b border-warning/30 bg-warning/10 px-4 py-3">
-                  <div className="flex flex-wrap items-start gap-2">
-                    <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-medium text-warning">Sesión muy larga</p>
-                      <p className="mt-0.5 text-[11px] leading-5 text-muted">
-                        {formatCompact(sessionTotalTokens(selected))} tokens acumulados
-                        {contextLimit && contextTokens > 0
-                          ? ` · contexto ${formatCompact(contextTokens)} / ${formatCompact(contextLimit)}`
-                          : ""}. Para seguir sin arrastrar todo el historial, crea una continuación con un resumen
-                        editable de los últimos cambios.
-                      </p>
-                    </div>
+            {notice ? (
+              <div className="flex items-start gap-2 border-b border-warning/25 bg-warning/10 px-4 py-2 text-[11px] text-warning">
+                <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                <span className="min-w-0 flex-1 break-words">{notice}</span>
+                <button className="shrink-0 text-warning/70 hover:text-warning" onClick={() => setNotice(null)}>
+                  <X size={12} />
+                </button>
+              </div>
+            ) : null}
+
+            {longSession ? (
+              <div className="flex flex-wrap items-center gap-3 border-b border-warning/25 bg-warning/[0.06] px-4 py-2.5">
+                <AlertTriangle size={14} className="shrink-0 text-warning" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-medium text-warning">Sesión larga</p>
+                  <p className="mt-0.5 text-[10px] leading-4 text-muted">
+                    {formatCompact(sessionTotalTokens(selected))} tokens acumulados
+                    {contextLimit && contextTokens > 0
+                      ? ` · contexto al ${contextRatio} %`
+                      : ""}
+                    . Continúa en una sesión nueva con un resumen editable para no arrastrar todo el historial.
+                  </p>
+                </div>
+                <Button
+                  variant="default"
+                  className="h-7 shrink-0 px-2 text-[11px]"
+                  onClick={openContinuation}
+                  disabled={context.isLoading}
+                >
+                  <ArrowRight size={12} /> Continuar en nueva sesión
+                </Button>
+              </div>
+            ) : null}
+
+            <Transcript
+              messages={transcript}
+              running={running}
+              loading={context.isLoading}
+              error={context.error}
+              onRetry={() => void context.refetch()}
+            />
+
+            <div className="border-t border-line-soft bg-carbon-900/80 px-3 py-3 lg:px-6">
+              <div className="mx-auto w-full max-w-3xl">
+                <div
+                  className={cn(
+                    "rounded-xl border bg-carbon-950 px-3 py-2.5 transition-colors focus-within:border-violet/60",
+                    dragging ? "border-violet ring-1 ring-violet/30" : "border-line",
+                  )}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setDragging(true);
+                  }}
+                  onDragLeave={(event) => {
+                    if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+                    setDragging(false);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setDragging(false);
+                    if (event.dataTransfer.files.length) void attachments.add(event.dataTransfer.files);
+                  }}
+                >
+                  <AttachmentChips
+                    files={attachments.files}
+                    onRemove={attachments.remove}
+                    error={attachments.error}
+                    reading={attachments.reading}
+                  />
+                  <textarea
+                    ref={textareaRef}
+                    rows={1}
+                    value={prompt}
+                    onChange={(event) => setPrompt(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        sendPrompt();
+                      }
+                    }}
+                    onPaste={(event) => {
+                      const pasted = filesFromClipboard(event.clipboardData);
+                      if (pasted.length > 0) {
+                        event.preventDefault();
+                        void attachments.add(pasted);
+                      }
+                    }}
+                    placeholder={
+                      dragging
+                        ? "Suelta los archivos para adjuntarlos…"
+                        : running
+                          ? "El agente está trabajando. Tu mensaje se encolará…"
+                          : "Escribe un mensaje… (Enter para enviar, Shift+Enter para salto de línea)"
+                    }
+                    className="max-h-[220px] min-h-[26px] w-full resize-none bg-transparent text-[13px] leading-6 text-ink outline-none placeholder:text-faint"
+                  />
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <AttachmentButton onAdd={attachments.add} disabled={send.isPending} />
+                    <span className="hidden text-[10px] text-faint sm:inline">
+                      {running ? "En ejecución · puedes detenerla" : "Adjunta imágenes o documentos"}
+                    </span>
+                    {contextLimit && contextTokens > 0 ? (
+                      <span className="ml-auto text-[10px] text-faint sm:hidden">
+                        {contextRatio}% contexto
+                      </span>
+                    ) : null}
                     <Button
-                      variant="default"
-                      className="h-7 shrink-0 px-2 text-[11px]"
-                      onClick={openContinuation}
-                      disabled={context.isLoading}
+                      variant="primary"
+                      className="ml-auto h-8 px-3 text-xs"
+                      onClick={sendPrompt}
+                      disabled={
+                        (!prompt.trim() && attachments.files.length === 0) ||
+                        send.isPending ||
+                        attachments.reading
+                      }
+                      title="Enviar mensaje (Enter)"
                     >
-                      <MessageSquarePlus size={12} /> Continuar en nueva sesión
+                      <Send size={13} /> Enviar
                     </Button>
                   </div>
                 </div>
-              ) : null}
-
-              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-                {context.isLoading ? (
-                  <Spinner label="Cargando mensajes" />
-                ) : context.isError ? (
-                  <ErrorState error={context.error} onRetry={() => void context.refetch()} />
-                ) : (context.data?.length ?? 0) === 0 ? (
-                  <EmptyState title="Sin mensajes" description="Envía el primer prompt a esta sesión." />
+                {send.isError ? (
+                  <p className="mt-1.5 text-[11px] text-danger">
+                    {send.error instanceof Error ? send.error.message : String(send.error)}
+                  </p>
                 ) : (
-                  <MessageList messages={context.data ?? []} />
+                  <p className="mt-1.5 truncate text-[10px] text-faint">
+                    Proyecto: {project ? shortPath(project.canonical) : "—"} · Coste de la sesión:{" "}
+                    {formatUsd(selected.cost)}
+                  </p>
                 )}
               </div>
-
-              <div className="border-t border-line-soft px-4 py-3">
-                <div className="flex items-end gap-2">
-                  <textarea
-                    className="field min-h-[38px] resize-y py-2 text-xs"
-                    rows={2}
-                    value={prompt}
-                    onChange={(event) => setPrompt(event.target.value)}
-                    placeholder="Escribe un prompt para esta sesión..."
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                        event.preventDefault();
-                        if (prompt.trim() && !send.isPending) send.mutate();
-                      }
-                    }}
-                  />
-                  <Button
-                    variant="primary"
-                    onClick={() => send.mutate()}
-                    disabled={!prompt.trim() || send.isPending}
-                    title="Enviar (Ctrl/Cmd+Enter)"
-                  >
-                    <Send size={14} /> Enviar
-                  </Button>
-                </div>
-                {send.isError ? (
-                  <div className="mt-2 text-[11px] text-danger">
-                    {send.error instanceof Error ? send.error.message : String(send.error)}
-                  </div>
-                ) : null}
-              </div>
-            </>
-          )}
-        </Card>
-      </div>
+            </div>
+          </>
+        )}
+      </section>
 
       <Modal
         open={Boolean(newChat)}
-        title="Nuevo chat"
-        description="Crea una sesión limpia para no arrastrar el historial. Si vienes de una sesión larga, el resumen de traspaso es editable."
+        title={newChat?.prompt.startsWith("Continuación de la sesión") ? "Continuar en nueva sesión" : "Nuevo chat"}
+        description="Una sesión limpia evita arrastrar historial y tokens. Si vienes de una sesión larga, el resumen de traspaso es editable."
         onClose={() => setNewChat(null)}
         width="max-w-2xl"
         footer={
@@ -531,17 +909,17 @@ export function SessionsPage() {
             </Button>
             <Button
               variant="primary"
-              onClick={() => newChat && createChat.mutate(newChat)}
-              disabled={!newChat || createChat.isPending || !newChat.agent}
+              onClick={() => newChat && createChat.mutate({ ...newChat, files: draftAttachments.files })}
+              disabled={!newChat || createChat.isPending || !newChat.agent || draftAttachments.reading}
             >
-              {createChat.isPending ? "Creando..." : "Crear chat"}
+              {createChat.isPending ? "Creando…" : "Crear chat"}
             </Button>
           </>
         }
       >
         {newChat ? (
           <div className="space-y-3">
-            <Field label="Título">
+            <Field label="Título" hint="Opcional; si lo dejas vacío se usa el primer prompt.">
               <input
                 className="field"
                 value={newChat.title}
@@ -582,6 +960,13 @@ export function SessionsPage() {
                 </select>
               </Field>
             </div>
+            <AttachmentChips
+              files={draftAttachments.files}
+              onRemove={draftAttachments.remove}
+              error={draftAttachments.error}
+              reading={draftAttachments.reading}
+              compact
+            />
             <Field
               label="Primer prompt"
               hint="Opcional. En una continuación, revisa el resumen antes de enviarlo."
@@ -590,9 +975,22 @@ export function SessionsPage() {
                 className="field min-h-32 resize-y text-xs leading-5"
                 value={newChat.prompt}
                 onChange={(event) => setNewChat({ ...newChat, prompt: event.target.value })}
-                placeholder="Escribe el primer mensaje o deja que la sesión espere..."
+                onPaste={(event) => {
+                  const pasted = filesFromClipboard(event.clipboardData);
+                  if (pasted.length > 0) {
+                    event.preventDefault();
+                    void draftAttachments.add(pasted);
+                  }
+                }}
+                placeholder="Escribe el primer mensaje o adjunta archivos…"
               />
             </Field>
+            <div className="flex items-center gap-2">
+              <AttachmentButton onAdd={draftAttachments.add} disabled={createChat.isPending} />
+              <span className="text-[10px] text-faint">
+                Imágenes o documentos · hasta 6 archivos de 8 MB
+              </span>
+            </div>
             <p className="text-[10px] text-faint">
               Proyecto: <span className="font-mono">{directory ?? "location por defecto"}</span>
             </p>
@@ -604,104 +1002,22 @@ export function SessionsPage() {
           </div>
         ) : null}
       </Modal>
-    </div>
-  );
-}
 
-function MessageList({ messages }: { messages: SessionMessage[] }) {
-  const endRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [messages.length]);
-
-  return (
-    <div className="space-y-4">
-      {messages.map((message) => (
-        <MessageBubble key={message.id} message={message} />
-      ))}
-      <div ref={endRef} />
-    </div>
-  );
-}
-
-function MessageBubble({ message }: { message: SessionMessage }) {
-  if (message.type === "user") {
-    return (
-      <div className="flex gap-2.5">
-        <div className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md border border-line bg-carbon-800 text-faint">
-          <User size={12} />
-        </div>
-        <div className="min-w-0 flex-1 rounded-lg border border-line-soft bg-carbon-850 px-3 py-2">
-          <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.08em] text-faint">Tú</div>
-          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-xs leading-5 text-ink">{message.text}</div>
-        </div>
-      </div>
-    );
-  }
-
-  if (message.type === "assistant") {
-    const parts = message.content ?? [];
-    return (
-      <div className="flex gap-2.5">
-        <div className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md border border-violet/30 bg-violet/10 text-violet-soft">
-          <Bot size={12} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="mb-1 flex items-center gap-2 text-[10px] text-faint">
-            <span className="font-medium uppercase tracking-[0.08em] text-muted">
-              {message.agent ?? "assistant"}
-            </span>
-            {message.model ? (
-              <span className="font-mono">
-                {message.model.providerID}/{message.model.id}
-              </span>
-            ) : null}
-            <span className="ml-auto">{formatDate(message.time?.created)}</span>
-          </div>
-          <div className="space-y-2">
-            {parts.map((part, index) => {
-              if (part.type === "text" && part.text) {
-                return (
-                  <div key={index} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-xs leading-5 text-ink">
-                    {part.text}
-                  </div>
-                );
-              }
-              if (part.type === "reasoning" && part.text) {
-                return (
-                  <details key={index} className="rounded-md border border-line-soft bg-carbon-900 px-2.5 py-2">
-                    <summary className="cursor-pointer text-[10px] font-medium uppercase tracking-[0.08em] text-faint">
-                      Razonamiento
-                    </summary>
-                    <div className="mt-2 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[11px] leading-5 text-muted">{part.text}</div>
-                  </details>
-                );
-              }
-              if (part.type === "tool") {
-                return (
-                  <div
-                    key={index}
-                    className="flex items-center gap-2 rounded-md border border-line-soft bg-carbon-900 px-2.5 py-1.5 font-mono text-[10px] text-muted"
-                  >
-                    <Cpu size={11} className="text-faint" />
-                    <span className="min-w-0 truncate text-ink">{part.tool ?? part.name ?? "tool"}</span>
-                    <span className="ml-auto text-faint">{part.state?.status ?? "—"}</span>
-                  </div>
-                );
-              }
-              return null;
-            })}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex items-center gap-2 rounded-md border border-line-soft bg-carbon-900 px-2.5 py-1.5 font-mono text-[10px] text-muted">
-      <ArrowUpRight size={11} className="text-faint" />
-      <span>{message.type}</span>
-      {message.text ? <span className="truncate text-faint">{message.text}</span> : null}
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        title="Eliminar chat"
+        confirmLabel={deleteSession.isPending ? "Eliminando…" : "Eliminar chat"}
+        danger
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => deleteTarget && deleteSession.mutate(deleteTarget.id)}
+        message={
+          <span>
+            Se eliminará{" "}
+            <span className="font-medium text-ink">{deleteTarget?.title ?? deleteTarget?.id}</span> y sus
+            subagentes. Esta acción no se puede deshacer.
+          </span>
+        }
+      />
     </div>
   );
 }

@@ -26,7 +26,14 @@ export interface Session {
   model?: ModelRef;
   cost: number;
   tokens: TokenUsage;
-  time: { created: number; updated: number; busy?: number; idle?: number; viewed?: number };
+  time: {
+    created: number;
+    updated: number;
+    busy?: number;
+    idle?: number;
+    viewed?: number;
+    archived?: number;
+  };
   title?: string;
   outcome?: string;
   location?: { directory: string };
@@ -300,15 +307,26 @@ export interface MessagePart {
   [key: string]: unknown;
 }
 
+export interface PromptFileAttachment {
+  data?: string;
+  mime?: string;
+  name?: string;
+  description?: string;
+  source?: { type: "inline" } | { type: "uri"; uri: string };
+}
+
 export interface SessionMessage {
   id: string;
   type: "user" | "assistant" | "tool" | string;
   text?: string;
   content?: MessagePart[];
+  files?: PromptFileAttachment[];
   agent?: string;
   model?: ModelRef;
   tokens?: TokenUsage;
   time?: { created?: number; completed?: number };
+  error?: { type?: string; message?: string } | unknown;
+  cost?: number;
   [key: string]: unknown;
 }
 

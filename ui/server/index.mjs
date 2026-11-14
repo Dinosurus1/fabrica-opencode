@@ -99,6 +99,12 @@ function proxy(req, res) {
     res.end(`OpenCode no responde en ${target.origin}: ${error.message}`);
   });
 
+  // El stream de eventos es de larga duración: al cerrar la pestaña hay que
+  // cerrar también la conexión con OpenCode para no dejar streams huérfanos.
+  res.on("close", () => {
+    if (!res.writableEnded) upstream.destroy();
+  });
+
   req.pipe(upstream);
 }
 
@@ -126,6 +132,11 @@ const server = createServer((req, res) => {
   }
   serveStatic(req, res);
 });
+
+// SSE (`/api/event`) mantiene la petición abierta; el timeout por defecto de
+// Node (5 min) cortaría el stream en mitad de una conversación.
+server.requestTimeout = 0;
+server.headersTimeout = 65_000;
 
 server.listen(port, host, () => {
   console.log(`Factory Console en http://${host}:${port}`);

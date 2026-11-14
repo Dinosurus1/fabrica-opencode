@@ -60,7 +60,7 @@ No publiques la consola en `0.0.0.0` sin poner delante autenticación y TLS.
 | Ruta | Qué muestra |
 |---|---|
 | `/` | Estado general, sesiones, steps, coste, uso por modelo y actividad reciente. |
-| `/sessions` | Sesiones raíz relevantes (sin subagentes ni temporales por defecto); crear chats, abrir, cambiar agente/modelo, prompt, interrumpir y aviso de sesión larga con traspaso a una sesión nueva. |
+| `/sessions` | Sesiones raíz relevantes (sin subagentes ni temporales por defecto) con lista agrupada y búsqueda. Crear, abrir, eliminar (con confirmación), cambiar agente/modelo, enviar prompts con adjuntos (imágenes, PDFs y documentos), interrumpir, seguir la conversación en tiempo real por SSE y aviso de sesión larga con traspaso a una sesión nueva. |
 | `/work` | Tareas, planes, gates, revisiones, presupuesto global y execution log. |
 | `/agents` | Selección de agentes por proyecto, modo manual/híbrido/auto y modelo activo. |
 | `/models` | Catálogo real, perfiles, política y asignación de modelo/presupuesto por rol. |
@@ -109,6 +109,12 @@ Factory Console (React/Vite)
 - Las llamadas que dependen de la location envían `location[directory]` con el
   `canonical` del proyecto seleccionado. Sin eso, OpenCode usaría la location
   por defecto.
+- La vista de sesiones se suscribe a `/api/event` (SSE) para reflejar mensajes,
+  herramientas y estado en tiempo real. Si el filtro de tipos deja de ser válido
+  tras actualizar OpenCode, reintenta automáticamente sin filtro.
+- Los adjuntos se envían como data URI en `files[].uri`; OpenCode los convierte
+  en adjuntos inline. El límite de la consola es 6 archivos de 8 MB (20 MB en
+  total) por mensaje.
 - El estado de la fábrica vive en PostgreSQL; la UI no mantiene un tablero
   paralelo.
 - El proxy del servidor Node sirve `dist/` y reenvía `/api` con Basic auth.
