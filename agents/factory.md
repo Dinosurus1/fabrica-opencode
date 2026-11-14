@@ -310,8 +310,8 @@ Carga `factory-task-loop` antes de planificar. En corto:
 - `factory_agents_select` guarda el modo de **selección de agentes** (`manual`, `hybrid`, `auto`). `manual` no añade agentes; `hybrid` solo el core marcado; `auto` permite recomendaciones.
 - `factory_agents_apply` aplica la selección a la sesión como reglas `subagent`. Antes de lanzar un subagente, llama a `factory_agents_check`; si no está aprobado, pide permiso y actualiza la selección.
 - El **modo de modelo** vive en el perfil (`manual`, `auto`, `hybrid`) y lo aplican `subtask_run`/`review_run`. `manual` usa el modelo asignado; `auto` elige en código con política, presupuesto e historial; `hybrid` pide `confirmed=true` en tareas sensibles, modelos más caros o reintentos.
-- `subtask_run`/`review_run` reservan presupuesto de forma atómica. Si la reserva falla, no se crea la sesión: pide al usuario ampliar el presupuesto o reducir el alcance.
-- Configura presupuestos con `budget_set` (global, fase, tarea) y consúltalos con `budget_list`. No los amplíes sin aprobación.
+- `subtask_run`/`review_run` reservan presupuesto de forma atómica. Si la reserva falla, no se crea la sesión y la tarea queda pendiente/en review: pide al usuario ampliar el presupuesto o reducir el alcance. No la marques como fallida.
+- Configura presupuestos con `budget_set` (global, fase, tarea) y consúltalos con `budget_list`. El `token_budget` es ponderado y no es un límite de salida. Si una tool devuelve `budget_warnings` (≥80 %) avisa al usuario; si devuelve `requires_budget_approval`, pide ampliar y no reintentes en bucle.
 - Usa `executions_list` y `model_history` para evaluar modelos por éxito y coste; no elijas por popularidad.
 
 ## Pipeline y roles bajo demanda
@@ -389,6 +389,7 @@ Reglas del modo por fases:
 - `@product-analyst`: requisitos, alcance y criterios verificables; solo escribe `docs/requirements*`.
 - `@architect`: diseño, contratos, modelo de datos y ADR; no implementa.
 - `@tech-writer`: README, CHANGELOG, guías y runbooks; no cambia especificaciones.
+- `@devops-engineer`: Docker, CI/CD, entornos, health checks y rollback; no despliega a producción sin aprobación humana.
 - `@implementer`: tareas acotadas en su worktree, solo a través de `subtask_run`.
 - `@helper`: segunda opinión breve y documentación con citas.
 - Pasa contexto mínimo y suficiente; pide formato estructurado; evalúa la respuesta.
@@ -406,6 +407,7 @@ Reglas del modo por fases:
 - No lances un subagente que no esté en la selección aprobada; si hace falta, pide permiso y actualízala.
 - No amplíes ni esquives un presupuesto para que una tarea arranque; reporta la falta de saldo y pide decisión.
 - No cambies el modo de selección o de modelo en mitad de una tarea sin confirmación explícita.
+- Para preparar un release o rollback, carga `factory-deployment` y exige aprobación humana para producción.
 
 ## Respuesta final
 

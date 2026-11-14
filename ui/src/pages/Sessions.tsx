@@ -26,16 +26,16 @@ import { rpc } from "../lib/rpc";
 import type { CatalogModel, Session, SessionMessage } from "../lib/types";
 
 export function SessionsPage() {
-  const { projectId, project } = useProject();
+  const { projects, projectId, project } = useProject();
   const directory = project?.canonical;
-  const [onlyProject, setOnlyProject] = useState(true);
+  const [onlyProject, setOnlyProject] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [agent, setAgent] = useState("");
   const [model, setModel] = useState("");
   const [prompt, setPrompt] = useState("");
   const queryClient = useQueryClient();
 
-  const sessions = useQuery({ queryKey: ["opencode", "sessions"], queryFn: () => api.sessions(80) });
+  const sessions = useQuery({ queryKey: ["opencode", "sessions"], queryFn: () => api.sessions(500) });
   const agents = useQuery({ queryKey: ["opencode", "agents", directory ?? "default"], queryFn: () => api.agents(directory) });
   const models = useQuery({
     queryKey: ["factory", "models", directory ?? "default"],
@@ -134,7 +134,7 @@ export function SessionsPage() {
 
       {error ? <ErrorState error={error} onRetry={() => void sessions.refetch()} /> : null}
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(380px,0.8fr)]">
         <Section
           className="min-w-0"
           title="Recientes"
@@ -172,7 +172,7 @@ export function SessionsPage() {
                       )}
                       onClick={() => setSelectedId(session.id)}
                     >
-                      <td className="max-w-[360px] px-4 py-3">
+                      <td className="max-w-[240px] px-4 py-3">
                         <div className="truncate text-xs font-medium text-ink">
                           {session.title ?? session.id}
                         </div>

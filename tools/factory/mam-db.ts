@@ -103,7 +103,7 @@ export interface ProfileAssignment {
   variant?: string | null;
   locked?: boolean;
   maxCostUsd?: number | null;
-  maxTokens?: number | null;
+  tokenBudget?: number | null;
   priority?: number;
 }
 
@@ -111,7 +111,7 @@ export interface ProfileAssignmentRecord extends ProfileAssignment {
   profileId: string;
   locked: boolean;
   maxCostUsd: number | null;
-  maxTokens: number | null;
+  tokenBudget: number | null;
   priority: number;
   createdAt: string;
   updatedAt: string;
@@ -183,6 +183,12 @@ export interface ExecutionFinishInput {
   tokensCacheWrite?: number;
   costUsd?: number | null;
   costSource?: string | null;
+  weightedTokens?: number;
+  budgetUnit?: string | null;
+  reservedWeightedTokens?: number | null;
+  reservedCostUsd?: number | null;
+  reservationSource?: string | null;
+  overrunRatio?: number | null;
   error?: string | null;
   gateRunId?: string | null;
   metadata?: Record<string, unknown>;
@@ -209,8 +215,14 @@ export interface ExecutionRecord {
   tokensReasoning: number;
   tokensCacheRead: number;
   tokensCacheWrite: number;
+  weightedTokens: number;
   costUsd: number | null;
   costSource: string | null;
+  budgetUnit: string | null;
+  reservedWeightedTokens: number | null;
+  reservedCostUsd: number | null;
+  reservationSource: string | null;
+  overrunRatio: number | null;
   status: string | null;
   error: string | null;
   gateRunId: string | null;
@@ -241,6 +253,12 @@ export interface ModelHistoryRecord {
   avgTokens: number | null;
 }
 
+export interface ExecutionPercentile {
+  runs: number;
+  p90WeightedTokens: number | null;
+  p90CostUsd: number | null;
+}
+
 export interface BudgetRecord {
   key: string;
   projectId: string;
@@ -248,11 +266,11 @@ export interface BudgetRecord {
   planId: string | null;
   phase: number | null;
   taskId: string | null;
-  maxTokens: number | null;
+  tokenBudget: number | null;
   maxCostUsd: number | null;
-  reservedTokens: number;
+  reservedWeightedTokens: number;
   reservedCostUsd: number;
-  spentTokens: number;
+  spentWeightedTokens: number;
   spentCostUsd: number;
   createdAt: string;
   updatedAt: string;
@@ -264,7 +282,7 @@ export interface BudgetInput {
   planId?: string | null;
   phase?: number | null;
   taskId?: string | null;
-  maxTokens?: number | null;
+  tokenBudget?: number | null;
   maxCostUsd?: number | null;
 }
 
@@ -340,7 +358,7 @@ interface AssignmentRow {
   variant: string | null;
   locked: boolean;
   max_cost_usd: string | number | null;
-  max_tokens: number | null;
+  token_budget: number | null;
   priority: number;
   created_at: Date | string;
   updated_at: Date | string;
@@ -409,8 +427,14 @@ interface ExecutionRow {
   tokens_reasoning: number | string;
   tokens_cache_read: number | string;
   tokens_cache_write: number | string;
+  weighted_tokens: number | string;
   cost_usd: string | number | null;
   cost_source: string | null;
+  budget_unit: string | null;
+  reserved_weighted_tokens: number | string | null;
+  reserved_cost_usd: string | number | null;
+  reservation_source: string | null;
+  overrun_ratio: string | number | null;
   status: string | null;
   error: string | null;
   gate_run_id: string | null;
@@ -428,11 +452,11 @@ interface BudgetRow {
   plan_id: string | null;
   phase: number | null;
   task_id: string | null;
-  max_tokens: number | string | null;
+  token_budget: number | string | null;
   max_cost_usd: string | number | null;
-  reserved_tokens: number | string;
+  reserved_weighted_tokens: number | string;
   reserved_cost_usd: string | number;
-  spent_tokens: number | string;
+  spent_weighted_tokens: number | string;
   spent_cost_usd: string | number;
   created_at: Date | string;
   updated_at: Date | string;
@@ -531,7 +555,7 @@ function mapAssignment(row: AssignmentRow): ProfileAssignmentRecord {
     variant: row.variant,
     locked: row.locked,
     maxCostUsd: numberOrNull(row.max_cost_usd),
-    maxTokens: row.max_tokens,
+    tokenBudget: row.token_budget,
     priority: row.priority,
     createdAt: ISO(row.created_at) ?? "",
     updatedAt: ISO(row.updated_at) ?? "",
@@ -579,8 +603,15 @@ function mapExecution(row: ExecutionRow): ExecutionRecord {
     tokensReasoning: Number(row.tokens_reasoning ?? 0),
     tokensCacheRead: Number(row.tokens_cache_read ?? 0),
     tokensCacheWrite: Number(row.tokens_cache_write ?? 0),
+    weightedTokens: Number(row.weighted_tokens ?? 0),
     costUsd: numberOrNull(row.cost_usd),
     costSource: row.cost_source,
+    budgetUnit: row.budget_unit,
+    reservedWeightedTokens:
+      row.reserved_weighted_tokens === null ? null : Number(row.reserved_weighted_tokens),
+    reservedCostUsd: numberOrNull(row.reserved_cost_usd),
+    reservationSource: row.reservation_source,
+    overrunRatio: numberOrNull(row.overrun_ratio),
     status: row.status,
     error: row.error,
     gateRunId: row.gate_run_id,
@@ -600,11 +631,11 @@ function mapBudget(row: BudgetRow): BudgetRecord {
     planId: row.plan_id,
     phase: row.phase,
     taskId: row.task_id,
-    maxTokens: row.max_tokens === null ? null : Number(row.max_tokens),
+    tokenBudget: row.token_budget === null ? null : Number(row.token_budget),
     maxCostUsd: numberOrNull(row.max_cost_usd),
-    reservedTokens: Number(row.reserved_tokens ?? 0),
+    reservedWeightedTokens: Number(row.reserved_weighted_tokens ?? 0),
     reservedCostUsd: numberOrNull(row.reserved_cost_usd) ?? 0,
-    spentTokens: Number(row.spent_tokens ?? 0),
+    spentWeightedTokens: Number(row.spent_weighted_tokens ?? 0),
     spentCostUsd: numberOrNull(row.spent_cost_usd) ?? 0,
     createdAt: ISO(row.created_at) ?? "",
     updatedAt: ISO(row.updated_at) ?? "",
@@ -894,19 +925,19 @@ export class MamStore {
         variant: assignment.variant ?? null,
         locked: assignment.locked ?? true,
         max_cost_usd: assignment.maxCostUsd ?? null,
-        max_tokens: assignment.maxTokens ?? null,
+        token_budget: assignment.tokenBudget ?? null,
         priority: assignment.priority ?? 0,
       }));
       await this.query(
         `INSERT INTO factory_profile_assignments (
            profile_id, agent_id, provider_id, model_id, variant, locked,
-           max_cost_usd, max_tokens, priority
+           max_cost_usd, token_budget, priority
          )
          SELECT $1, agent_id, provider_id, model_id, variant, locked,
-                max_cost_usd, max_tokens, priority
+                max_cost_usd, token_budget, priority
          FROM jsonb_to_recordset($2::jsonb) AS x(
            agent_id text, provider_id text, model_id text, variant text,
-           locked boolean, max_cost_usd numeric, max_tokens integer, priority integer
+           locked boolean, max_cost_usd numeric, token_budget integer, priority integer
          )
          ON CONFLICT (profile_id, agent_id) DO UPDATE SET
            provider_id = EXCLUDED.provider_id,
@@ -914,7 +945,7 @@ export class MamStore {
            variant = EXCLUDED.variant,
            locked = EXCLUDED.locked,
            max_cost_usd = EXCLUDED.max_cost_usd,
-           max_tokens = EXCLUDED.max_tokens,
+           token_budget = EXCLUDED.token_budget,
            priority = EXCLUDED.priority,
            updated_at = now()`,
         [id, JSON.stringify(payload)],
@@ -1063,11 +1094,17 @@ export class MamStore {
          tokens_reasoning = $5,
          tokens_cache_read = $6,
          tokens_cache_write = $7,
-         cost_usd = $8,
-         cost_source = $9,
-         error = $10,
-         gate_run_id = COALESCE($11, gate_run_id),
-         metadata = metadata || $12::jsonb,
+         weighted_tokens = $8,
+         cost_usd = $9,
+         cost_source = $10,
+         budget_unit = $11,
+         reserved_weighted_tokens = $12,
+         reserved_cost_usd = $13,
+         reservation_source = $14,
+         overrun_ratio = $15,
+         error = $16,
+         gate_run_id = COALESCE($17, gate_run_id),
+         metadata = metadata || $18::jsonb,
          finished_at = now()
        WHERE id = $1`,
       [
@@ -1078,8 +1115,14 @@ export class MamStore {
         input.tokensReasoning ?? 0,
         input.tokensCacheRead ?? 0,
         input.tokensCacheWrite ?? 0,
+        input.weightedTokens ?? 0,
         input.costUsd ?? null,
         input.costSource ?? null,
+        input.budgetUnit ?? null,
+        input.reservedWeightedTokens ?? null,
+        input.reservedCostUsd ?? null,
+        input.reservationSource ?? null,
+        input.overrunRatio ?? null,
         input.error ?? null,
         input.gateRunId ?? null,
         JSON.stringify(input.metadata ?? {}),
@@ -1143,6 +1186,66 @@ export class MamStore {
     }));
   }
 
+  async executionPercentile(
+    role: string,
+    difficulty: string,
+    percentile = 0.9,
+  ): Promise<ExecutionPercentile> {
+    const result = await this.query<{
+      runs: number | string;
+      p90_tokens: string | number | null;
+      p90_cost: string | number | null;
+    }>(
+      `SELECT count(*)::int AS runs,
+              percentile_cont($3) WITHIN GROUP (ORDER BY weighted_tokens) AS p90_tokens,
+              percentile_cont($3) WITHIN GROUP (ORDER BY cost_usd) AS p90_cost
+       FROM factory_execution_log
+       WHERE role = $1
+         AND status = 'done'
+         AND metadata->>'difficulty' = $2
+         AND (weighted_tokens > 0 OR cost_usd > 0)`,
+      [role, difficulty, Math.min(Math.max(percentile, 0.5), 0.99)],
+    );
+    const row = result.rows[0];
+    return {
+      runs: Number(row?.runs ?? 0),
+      p90WeightedTokens: numberOrNull(row?.p90_tokens ?? null),
+      p90CostUsd: numberOrNull(row?.p90_cost ?? null),
+    };
+  }
+
+  async overrunRoles(): Promise<Array<{ role: string; overruns: number; runs: number }>> {
+    const result = await this.query<{
+      role: string;
+      overruns: number | string;
+      runs: number | string;
+    }>(
+      `SELECT coalesce(role, 'unknown') AS role,
+              count(*) FILTER (WHERE overrun_ratio > 1.5)::int AS overruns,
+              count(*)::int AS runs
+       FROM factory_execution_log
+       WHERE status = 'done' AND overrun_ratio IS NOT NULL
+       GROUP BY role
+       HAVING count(*) FILTER (WHERE overrun_ratio > 1.5) >= 2
+       ORDER BY overruns DESC`,
+    );
+    return result.rows.map((row) => ({
+      role: row.role,
+      overruns: Number(row.overruns ?? 0),
+      runs: Number(row.runs ?? 0),
+    }));
+  }
+
+  async budgetUsage(keys: string[]): Promise<BudgetRecord[]> {
+    const unique = [...new Set(keys.filter(Boolean))];
+    if (unique.length === 0) return [];
+    const result = await this.query<BudgetRow>(
+      `SELECT * FROM factory_budgets WHERE key = ANY($1::text[]) ORDER BY scope`,
+      [unique],
+    );
+    return result.rows.map(mapBudget);
+  }
+
   async priceVersion(): Promise<string | null> {
     const result = await this.query<{ version: string }>(
       `SELECT version FROM factory_model_prices ORDER BY version DESC LIMIT 1`,
@@ -1204,11 +1307,11 @@ export class MamStore {
     const key = budgetKey(input);
     const result = await this.query<BudgetRow>(
       `INSERT INTO factory_budgets (
-         key, project_id, scope, plan_id, phase, task_id, max_tokens, max_cost_usd
+         key, project_id, scope, plan_id, phase, task_id, token_budget, max_cost_usd
        )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (key) DO UPDATE SET
-         max_tokens = EXCLUDED.max_tokens,
+         token_budget = EXCLUDED.token_budget,
          max_cost_usd = EXCLUDED.max_cost_usd,
          updated_at = now()
        RETURNING *`,
@@ -1219,7 +1322,7 @@ export class MamStore {
         input.planId ?? null,
         input.phase ?? null,
         input.taskId ?? null,
-        input.maxTokens ?? null,
+        input.tokenBudget ?? null,
         input.maxCostUsd ?? null,
       ],
     );
@@ -1255,7 +1358,7 @@ export class MamStore {
        ),
        current AS (
          SELECT b.key,
-                (b.max_tokens IS NULL OR b.reserved_tokens + b.spent_tokens + $2::bigint <= b.max_tokens) AS tokens_ok,
+                (b.token_budget IS NULL OR b.reserved_weighted_tokens + b.spent_weighted_tokens + $2::bigint <= b.token_budget) AS tokens_ok,
                 (b.max_cost_usd IS NULL OR b.reserved_cost_usd + b.spent_cost_usd + $3::numeric <= b.max_cost_usd) AS cost_ok
          FROM factory_budgets b
          JOIN keys k ON k.key = b.key
@@ -1268,7 +1371,7 @@ export class MamStore {
        ),
        updated AS (
          UPDATE factory_budgets b
-         SET reserved_tokens = b.reserved_tokens + $2::bigint,
+         SET reserved_weighted_tokens = b.reserved_weighted_tokens + $2::bigint,
              reserved_cost_usd = b.reserved_cost_usd + $3::numeric,
              updated_at = now()
          FROM current c, allowed a
@@ -1279,7 +1382,7 @@ export class MamStore {
        ),
        inserted AS (
          INSERT INTO factory_budget_reservations (
-           execution_id, budget_key, reserved_tokens, reserved_cost_usd
+           execution_id, budget_key, reserved_weighted_tokens, reserved_cost_usd
          )
          SELECT $4::uuid, key, $2::bigint, $3::numeric FROM updated
          RETURNING budget_key
@@ -1307,9 +1410,9 @@ export class MamStore {
        ),
        budgets AS (
          UPDATE factory_budgets b
-         SET reserved_tokens = GREATEST(0, b.reserved_tokens - r.reserved_tokens),
+         SET reserved_weighted_tokens = GREATEST(0, b.reserved_weighted_tokens - r.reserved_weighted_tokens),
              reserved_cost_usd = GREATEST(0, b.reserved_cost_usd - r.reserved_cost_usd),
-             spent_tokens = b.spent_tokens + $2::bigint,
+             spent_weighted_tokens = b.spent_weighted_tokens + $2::bigint,
              spent_cost_usd = b.spent_cost_usd + $3::numeric,
              updated_at = now()
          FROM reservations r
@@ -1319,7 +1422,7 @@ export class MamStore {
        settled AS (
          UPDATE factory_budget_reservations
          SET status = 'settled',
-             settled_tokens = $2::bigint,
+             settled_weighted_tokens = $2::bigint,
              settled_cost_usd = $3::numeric,
              settled_at = now()
          WHERE execution_id = $1 AND status = 'reserved'
@@ -1340,7 +1443,7 @@ export class MamStore {
        ),
        budgets AS (
          UPDATE factory_budgets b
-         SET reserved_tokens = GREATEST(0, b.reserved_tokens - r.reserved_tokens),
+         SET reserved_weighted_tokens = GREATEST(0, b.reserved_weighted_tokens - r.reserved_weighted_tokens),
              reserved_cost_usd = GREATEST(0, b.reserved_cost_usd - r.reserved_cost_usd),
              updated_at = now()
          FROM reservations r
@@ -1372,7 +1475,7 @@ export class MamStore {
 
   async staleReservations(minutes = 90): Promise<Array<Record<string, unknown>>> {
     const result = await this.query<Record<string, unknown>>(
-      `SELECT id, execution_id, budget_key, reserved_tokens, reserved_cost_usd, created_at
+      `SELECT id, execution_id, budget_key, reserved_weighted_tokens, reserved_cost_usd, created_at
        FROM factory_budget_reservations
        WHERE status = 'reserved'
          AND created_at < now() - ($1::int || ' minutes')::interval

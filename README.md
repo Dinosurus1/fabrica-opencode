@@ -14,12 +14,13 @@ La fábrica vive en `~/.config/opencode/` y se compone de:
 
 - `agents/`: orquestador (`factory`), subagentes de revisión, ayuda e
   investigación, los agentes del modo por fases (`implementer` y
-  `plan-reviewer`) y los roles bajo demanda (`product-analyst`, `architect` y
-  `tech-writer`).
+  `plan-reviewer`) y los roles bajo demanda (`product-analyst`, `architect`,
+  `tech-writer` y `devops-engineer`).
 - `skills/`: procedimientos de onboarding, ingesta, triaje, tareas, compuertas,
-  revisión, seguridad, git, orquestación por fases, pipeline y cierre. Solo se
-  versionan las skills propias `factory-*`; las de `anthropics/skills` quedan en
-  local y no se redistribuyen (ver `docs/skills-import.md`).
+  revisión, seguridad, git, orquestación por fases, pipeline, despliegue y
+  cierre. Solo se versionan las skills propias `factory-*`; las de
+  `anthropics/skills` quedan en local y no se redistribuyen (ver
+  `docs/skills-import.md`).
 - `tools/factory/`: tools de perfil, tareas, checks, compuertas, seguridad, git,
   revisiones, plan, worktrees, fases, reanudación y diagnóstico.
 - `plugins/factory/`: registro de tools, migraciones SQL, RPC de la fábrica y
@@ -170,11 +171,12 @@ No modifica la tabla `memories` ni el esquema de `opencode-memory`; crea
 `factory_execution_profiles`, `factory_profile_assignments`,
 `factory_audit_events`, `factory_execution_log`, `factory_budgets`,
 `factory_budget_reservations` y `factory_model_prices`. Las migraciones 004, 005,
-006 y 007 son aditivas y dejan `schema_version=7`; la 005 añade
+006, 007 y 008 son aditivas y dejan `schema_version=8`; la 005 añade
 `review_exhausted`, `residual_findings`, `approval_waiver` y las métricas por
 ronda del plan-reviewer; la 006 añade el catálogo MAM, perfiles, asignaciones,
 auditoría y registro de ejecución; la 007 añade presupuestos con reservas
-atómicas y precios versionados.
+atómicas y precios versionados; la 008 renombra `max_tokens` a `token_budget`,
+separa tokens ponderados y registra sobreconsumo.
 
 `factory_doctor` da `warn` si faltan `memories` o `capture_state`. Sin memoria,
 las compuertas y las revisiones funcionan, pero `task_close` no puede cerrar.
@@ -212,6 +214,7 @@ solo el que la etapa necesita, con un entregable verificable:
 | Alcance ambiguo o requisitos incompletos | `product-analyst` | `docs/requirements.md` con criterios verificables | No decide arquitectura ni implementa |
 | El cambio cruza módulos, contratos, datos o infraestructura | `architect` | `docs/architecture.md` + ADR en `docs/decisions/` | No implementa ni cambia requisitos |
 | Entrega, handoff o documentación desactualizada | `tech-writer` | README, CHANGELOG, guías y runbooks | No cambia especificaciones ni inventa comportamiento |
+| Release, Docker/CI, health checks o rollback | `devops-engineer` | Cambios de infra/CI, runbook con health check y rollback probado | No despliega a producción sin aprobación humana |
 
 El procedimiento y las compuertas están en la skill `factory-pipeline`. La carta
 de gobierno completa está en `docs/factory-charter.md`. Si un rol no puede
@@ -317,15 +320,25 @@ código combinando política, factibilidad, presupuesto e historial de éxito/co
 `hybrid` es auto con aprobación en tareas sensibles, modelos más caros o
 reintentos. El LLM solo aporta la clasificación de dificultad.
 
-**Presupuesto:** `subtask_run` y `review_run` reservan tokens/coste de forma
-atómica antes de crear la sesión y liquidan el uso real al terminar. La jerarquía
-es global, fase y tarea; si la reserva no cabe, el lanzamiento falla. `max_tokens`
-es el límite principal cuando el proveedor es de tarifa plana o gratuita.
+**Presupuesto:** `subtask_run` y `review_run` reservan de forma atómica antes de
+crear la sesión y liquidan el uso real al terminar. La unidad es **coste** cuando
+hay precio versionado y **tokens ponderados** cuando no lo hay (Ollama, tarifa
+plana). La jerarquía es global, fase y tarea. Si hay al menos 5 ejecuciones
+históricas del rol+dificultad, se reserva el percentil 90; hasta entonces se usan
+100k/300k/600k tokens ponderados o el `token_budget` de la asignación. El
+`token_budget` no es el límite de salida de la API: no se envía al modelo. Aviso
+al 80 %; si no cabe, la tarea queda pendiente/en review y se pide ampliar, no se
+mata. Un sobreconsumo repetido (>1,5x la reserva) lo avisa `factory_doctor` y la
+calibración se recalibra con el histórico.
 
 **Execution log:** cada ejecución escribe una fila al empezar y otra al terminar,
-con proyecto, fase, tarea, agente, modelo, modo, motivo de selección, tokens,
-coste, estado, intento, error, versiones y referencia al gate. Alimenta
-`executions_list`, `model_history` y Analytics.
+con proyecto, fase, tarea, agente, ejecución padre, modelo, modo, motivo de
+selección, tokens de entrada frescos, caché leída/escrita, salida, razonamiento,
+tokens ponderados, coste, estado, intento, error, versiones, precio versionado y
+referencia al gate. Alimenta `executions_list`, `model_history` y Analytics.
+Analytics separa el coste de fábrica (execution log) del coste estimado de todas
+las sesiones de OpenCode; este último se calcula con la tabla de precios
+versionada y puede diferir del panel de facturación del proveedor.
 
 RPC para la consola web: `/api/rpc/opencode.factory/*` (`models.*`, `agents.list`,
 `profiles.*`, `work.*`, `memory.*`, `analytics.summary`, `health`).
@@ -368,6 +381,7 @@ la sesión del agente y no gastan contexto.
 | `product-analyst` | Requisitos y criterios verificables | `opencode-go/glm-5.3` |
 | `architect` | Diseño, contratos y ADR | `opencode-go/glm-5.3` |
 | `tech-writer` | Documentación y runbooks | `opencode-go/glm-5.3-flash` |
+| `devops-engineer` | Docker, CI/CD y rollback | `opencode-go/glm-5.3` |
 
 En el modo por fases, `subtask_run` puede fijar otro modelo por tarea y
 `review_run`/`phase_close` eligen el revisor por familia: un revisor nunca usa

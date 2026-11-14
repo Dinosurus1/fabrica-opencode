@@ -47,6 +47,7 @@ const ROLE_BY_AGENT: Record<string, string> = {
   "code-reviewer": "review",
   "security-reviewer": "security",
   "tech-writer": "documentation",
+  "devops-engineer": "devops",
   "plan-reviewer": "planning",
   helper: "assistance",
   researcher: "research",
@@ -162,9 +163,9 @@ function asAssignments(value: unknown): ProfileAssignment[] {
       variant: asString(raw.variant) || null,
       locked: raw.locked !== false,
       maxCostUsd: asNumberOrNull(raw.maxCostUsd ?? raw.max_cost_usd),
-      maxTokens:
-        typeof (raw.maxTokens ?? raw.max_tokens) === "number"
-          ? Math.round(Number(raw.maxTokens ?? raw.max_tokens))
+      tokenBudget:
+        typeof (raw.tokenBudget ?? raw.token_budget) === "number"
+          ? Math.round(Number(raw.tokenBudget ?? raw.token_budget))
           : null,
       priority:
         typeof raw.priority === "number" ? Math.round(raw.priority) : 0,
@@ -361,7 +362,7 @@ export async function validateProfileInput(
         message: "El presupuesto no puede ser negativo.",
       });
     }
-    if (typeof assignment.maxTokens === "number" && assignment.maxTokens < 1) {
+    if (typeof assignment.tokenBudget === "number" && assignment.tokenBudget < 1) {
       issues.push({
         severity: "error",
         agentId: assignment.agentId,
@@ -611,7 +612,7 @@ export function createMamTools(deps: MamToolsDeps): ToolDef[] {
                 variant: { type: "string" },
                 locked: { type: "boolean", default: true },
                 max_cost_usd: { type: "number", minimum: 0 },
-                max_tokens: { type: "integer", minimum: 1 },
+                token_budget: { type: "integer", minimum: 1 },
                 priority: { type: "integer" },
               },
               required: ["agent_id", "provider_id", "model_id"],

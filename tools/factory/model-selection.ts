@@ -43,7 +43,7 @@ export interface ModelSelection {
   profileId: string | null;
   assignment: ProfileAssignmentRecord | null;
   policy: Record<string, unknown>;
-  maxTokens: number | null;
+  tokenBudget: number | null;
   maxCostUsd: number | null;
 }
 
@@ -159,7 +159,7 @@ export async function selectModel(input: ModelSelectionInput): Promise<ModelSele
       profileId: resolved.profile?.id ?? null,
       assignment,
       policy,
-      maxTokens: assignment.maxTokens,
+      tokenBudget: assignment.tokenBudget,
       maxCostUsd: assignment.maxCostUsd,
     };
   }
@@ -214,7 +214,7 @@ export async function selectModel(input: ModelSelectionInput): Promise<ModelSele
         profileId: resolved.profile?.id ?? null,
         assignment,
         policy,
-        maxTokens: assignment?.maxTokens ?? null,
+        tokenBudget: assignment?.tokenBudget ?? null,
         maxCostUsd: assignment?.maxCostUsd ?? null,
       };
     }
@@ -229,7 +229,7 @@ export async function selectModel(input: ModelSelectionInput): Promise<ModelSele
     profileId: resolved.profile?.id ?? null,
     assignment,
     policy,
-    maxTokens: assignment?.maxTokens ?? null,
+    tokenBudget: assignment?.tokenBudget ?? null,
     maxCostUsd: assignment?.maxCostUsd ?? null,
   };
 }

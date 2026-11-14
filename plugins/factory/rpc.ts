@@ -237,7 +237,7 @@ export const FactoryRpc = Rpc.define({
           plan_id: { type: "string" },
           phase: { type: "integer", minimum: 0 },
           task_id: { type: "string" },
-          max_tokens: { type: "integer", minimum: 0 },
+          token_budget: { type: "integer", minimum: 0 },
           max_cost_usd: { type: "number", minimum: 0 },
           confirmed: { type: "boolean" },
         },

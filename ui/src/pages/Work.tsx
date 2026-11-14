@@ -82,7 +82,7 @@ export function WorkPage() {
   useEffect(() => {
     const globalBudget = budgets.data?.budgets.find((budget) => budget.scope === "global");
     if (!globalBudget) return;
-    setBudgetTokens(globalBudget.maxTokens ?? "");
+    setBudgetTokens(globalBudget.tokenBudget ?? "");
     setBudgetCost(globalBudget.maxCostUsd ?? "");
   }, [budgets.data]);
 
@@ -93,7 +93,7 @@ export function WorkPage() {
         {
           scope: "global",
           project_id: projectId,
-          max_tokens: budgetTokens === "" ? undefined : Number(budgetTokens),
+          token_budget: budgetTokens === "" ? undefined : Number(budgetTokens),
           max_cost_usd: budgetCost === "" ? undefined : Number(budgetCost),
           confirmed: true,
         },
@@ -173,7 +173,7 @@ export function WorkPage() {
         actions={<Badge tone="violet"><Wallet size={12} /> global</Badge>}
       >
         <div className="grid gap-3 p-4 md:grid-cols-4">
-          <Field label="Máx. tokens global">
+          <Field label="Token budget global (ponderado)">
             <input
               type="number"
               min={0}
@@ -198,13 +198,13 @@ export function WorkPage() {
           <div className="rounded-lg border border-line-soft bg-carbon-950/50 px-3 py-2">
             <div className="text-[10px] uppercase tracking-[0.08em] text-faint">Reservado</div>
             <div className="mt-1 text-sm text-ink">
-              {formatCompact(globalBudget?.reservedTokens ?? 0)} tok · {formatUsd(globalBudget?.reservedCostUsd ?? 0)}
+              {formatCompact(globalBudget?.reservedWeightedTokens ?? 0)} tok pond. · {formatUsd(globalBudget?.reservedCostUsd ?? 0)}
             </div>
           </div>
           <div className="rounded-lg border border-line-soft bg-carbon-950/50 px-3 py-2">
             <div className="text-[10px] uppercase tracking-[0.08em] text-faint">Gastado</div>
             <div className="mt-1 text-sm text-ink">
-              {formatCompact(globalBudget?.spentTokens ?? 0)} tok · {formatUsd(globalBudget?.spentCostUsd ?? 0)}
+              {formatCompact(globalBudget?.spentWeightedTokens ?? 0)} tok pond. · {formatUsd(globalBudget?.spentCostUsd ?? 0)}
             </div>
           </div>
         </div>
@@ -370,7 +370,8 @@ export function WorkPage() {
                     <th className="table-head px-4 py-2.5">Rol</th>
                     <th className="table-head px-4 py-2.5">Modelo</th>
                     <th className="table-head px-4 py-2.5">Estado</th>
-                    <th className="table-head px-4 py-2.5">Tokens</th>
+                    <th className="table-head px-4 py-2.5">Tokens (in/cache/out)</th>
+                    <th className="table-head px-4 py-2.5">Reserva / overrun</th>
                     <th className="table-head px-4 py-2.5">Coste</th>
                     <th className="table-head px-4 py-2.5">Duración</th>
                     <th className="table-head px-4 py-2.5">Motivo / error</th>
@@ -388,14 +389,27 @@ export function WorkPage() {
                           : "—"}
                       </td>
                       <td className="px-4 py-2.5"><StatusBadge value={execution.status ?? "—"} /></td>
-                      <td className="px-4 py-2.5 text-[11px] text-muted">
-                        {formatCompact(
-                          execution.tokensInput +
-                            execution.tokensOutput +
-                            execution.tokensReasoning +
-                            execution.tokensCacheRead +
-                            execution.tokensCacheWrite,
-                        )}
+                      <td className="px-4 py-2.5 text-[10px] text-muted">
+                        <div>
+                          in {formatCompact(execution.tokensInput)} · cR {formatCompact(execution.tokensCacheRead)} · out{" "}
+                          {formatCompact(execution.tokensOutput)}
+                        </div>
+                        <div className="text-faint">
+                          pond. {formatCompact(execution.weightedTokens)} · raz.{" "}
+                          {formatCompact(execution.tokensReasoning)}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 text-[10px] text-muted">
+                        <div>
+                          {execution.budgetUnit === "cost"
+                            ? formatUsd(execution.reservedCostUsd)
+                            : `${formatCompact(execution.reservedWeightedTokens ?? 0)} pond.`}
+                        </div>
+                        <div className="text-faint">
+                          {execution.overrunRatio !== null
+                            ? `${Math.round(execution.overrunRatio * 100)}%`
+                            : "—"}
+                        </div>
                       </td>
                       <td className="px-4 py-2.5 text-[11px] text-muted">{formatUsd(execution.costUsd)}</td>
                       <td className="px-4 py-2.5 text-[11px] text-muted">

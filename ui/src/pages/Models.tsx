@@ -22,7 +22,7 @@ interface AssignmentDraft {
   providerId: string;
   modelId: string;
   maxCostUsd: number | null;
-  maxTokens: number | null;
+  tokenBudget: number | null;
 }
 
 interface PolicyDraft {
@@ -131,7 +131,7 @@ export function ModelsPage() {
         providerId: assignment.providerId,
         modelId: assignment.modelId,
         maxCostUsd: assignment.maxCostUsd ?? null,
-        maxTokens: assignment.maxTokens ?? null,
+        tokenBudget: assignment.tokenBudget ?? null,
       };
     }
     setDraft(next);
@@ -196,7 +196,7 @@ export function ModelsPage() {
     const currentMap = new Map(
       (current.assignments ?? []).map((assignment) => [
         assignment.agentId,
-        `${assignment.providerId}/${assignment.modelId}|${assignment.maxCostUsd ?? ""}|${assignment.maxTokens ?? ""}`,
+        `${assignment.providerId}/${assignment.modelId}|${assignment.maxCostUsd ?? ""}|${assignment.tokenBudget ?? ""}`,
       ]),
     );
     const draftEntries = Object.entries(draft);
@@ -204,7 +204,7 @@ export function ModelsPage() {
     return draftEntries.some(
       ([agentId, assignment]) =>
         currentMap.get(agentId) !==
-        `${assignment.providerId}/${assignment.modelId}|${assignment.maxCostUsd ?? ""}|${assignment.maxTokens ?? ""}`,
+        `${assignment.providerId}/${assignment.modelId}|${assignment.maxCostUsd ?? ""}|${assignment.tokenBudget ?? ""}`,
     );
   }, [profile.data, name, description, mode, draft, effectivePolicy]);
 
@@ -229,7 +229,7 @@ export function ModelsPage() {
         modelId: assignment.modelId,
         locked: true,
         maxCostUsd: assignment.maxCostUsd,
-        maxTokens: assignment.maxTokens,
+        tokenBudget: assignment.tokenBudget,
       }));
       return rpc<{ saved: boolean; issues?: Array<{ message: string; severity: string }> }>("profiles.upsert", {
         id: profile.data.id,
@@ -374,7 +374,7 @@ export function ModelsPage() {
 
       {error ? <ErrorState error={error} onRetry={() => void models.refetch()} /> : null}
 
-      <div className="grid gap-5 xl:grid-cols-[280px_1fr]">
+      <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
         <Section
           title="Perfiles"
           description={`${profiles.data?.count ?? 0} guardados`}
@@ -434,8 +434,9 @@ export function ModelsPage() {
           </div>
         </Section>
 
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-5">
           <Section
+            className="min-w-0"
             title={profile.data ? `Editar: ${profile.data.name}` : "Perfil"}
             description="El perfil define qué modelo ejecuta cada agente. No cambia permisos ni instrucciones."
             actions={
@@ -510,8 +511,8 @@ export function ModelsPage() {
                         <th className="table-head px-3 py-2">Rol</th>
                         <th className="table-head px-3 py-2">Modelo asignado</th>
                         <th className="table-head px-3 py-2">Contexto</th>
-                        <th className="table-head px-3 py-2">Máx. tokens</th>
-                        <th className="table-head px-3 py-2">Máx. coste</th>
+                        <th className="table-head px-3 py-2">Token budget</th>
+                        <th className="table-head px-3 py-2">Coste máx.</th>
                         <th className="table-head px-3 py-2">Tools</th>
                       </tr>
                     </thead>
@@ -551,7 +552,7 @@ export function ModelsPage() {
                                       providerId,
                                       modelId,
                                       maxCostUsd: current[agent.agentId]?.maxCostUsd ?? null,
-                                      maxTokens: current[agent.agentId]?.maxTokens ?? null,
+                                      tokenBudget: current[agent.agentId]?.tokenBudget ?? null,
                                     },
                                   }));
                                 }}
@@ -577,15 +578,15 @@ export function ModelsPage() {
                                 min={0}
                                 step={1000}
                                 className="field h-8 w-24 text-xs"
-                                value={assignment?.maxTokens ?? ""}
-                                placeholder="—"
+                                value={assignment?.tokenBudget ?? ""}
+                                placeholder="ponderado"
                                 disabled={!assignment}
                                 onChange={(event) => {
                                   if (!assignment) return;
                                   const value = event.target.value === "" ? null : Math.max(0, Math.round(Number(event.target.value)));
                                   setDraft((current) => ({
                                     ...current,
-                                    [agent.agentId]: { ...current[agent.agentId]!, maxTokens: value },
+                                    [agent.agentId]: { ...current[agent.agentId]!, tokenBudget: value },
                                   }));
                                 }}
                               />
@@ -681,6 +682,7 @@ export function ModelsPage() {
           </Section>
 
           <Section
+            className="min-w-0"
             title="Catálogo"
             description="Modelos visibles en OpenCode con coste de catálogo, contexto y capacidades."
             actions={

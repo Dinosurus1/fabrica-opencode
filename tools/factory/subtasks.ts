@@ -20,12 +20,13 @@ import type { MamRuntime } from "./mam.js";
 import { isSensitiveTask, filesOutsideOwned, isSafeBranchName, matchesGlob, slugify, worktreeRoot } from "./paths.js";
 import { routeReviewMap, sameFamily } from "./routing.js";
 import {
-  estimateReserveCost,
-  estimateReserveTokens,
+  budgetWarnings,
+  calibrateReservePlan,
   releaseExecution,
   reserveExecution,
   settleExecution,
   toolVersions,
+  type ReservePlan,
   usageTotals,
 } from "./budget.js";
 import { activeMode, selectModel, type WorkMode } from "./model-selection.js";
@@ -352,14 +353,14 @@ async function runOne(
     usage: emptyUsage(null),
   });
 
-  const reserveTokens = estimateReserveTokens(task.difficulty, selection.maxTokens);
-  const reserveCost = await estimateReserveCost(
-    deps.mam.store,
-    selection.providerId,
-    selection.modelId,
-    reserveTokens,
-    selection.maxCostUsd,
-  );
+  const reservePlan = await calibrateReservePlan(deps.mam.store, {
+    role: "implementer",
+    difficulty: task.difficulty,
+    providerId: selection.providerId,
+    modelId: selection.modelId,
+    assignmentTokenBudget: selection.tokenBudget,
+    assignmentMaxCostUsd: selection.maxCostUsd,
+  });
   let executionId: string;
   try {
     executionId = await deps.mam.store.startExecution({
@@ -382,8 +383,11 @@ async function runOne(
         difficulty: task.difficulty,
         risk_flags: task.riskFlags,
         plan_task_id: task.id,
-        reserved_tokens: reserveTokens,
-        reserved_cost_usd: reserveCost,
+        reserved_weighted_tokens: reservePlan.tokens,
+        reserved_cost_usd: reservePlan.costUsd,
+        budget_unit: reservePlan.unit,
+        reservation_source: reservePlan.source,
+        history_runs: reservePlan.historyRuns,
       },
     });
   } catch (error) {
@@ -409,8 +413,10 @@ async function runOne(
     if (executionClosed) return;
     executionClosed = true;
     const totals = usageTotals(usage);
+    const usedBudget = reservePlan.unit === "cost" ? totals.costUsd : totals.weightedTokens;
+    const reservedBudget = reservePlan.unit === "cost" ? reservePlan.costUsd : reservePlan.tokens;
     if (budgetReserved) {
-      await settleExecution(deps.mam, executionId, totals.tokens, totals.costUsd).catch(() => undefined);
+      await settleExecution(deps.mam, executionId, totals.weightedTokens, totals.costUsd).catch(() => undefined);
     } else {
       await releaseExecution(deps.mam, executionId).catch(() => undefined);
     }
@@ -421,8 +427,14 @@ async function runOne(
       tokensReasoning: usage.tokens.reasoning,
       tokensCacheRead: usage.tokens.cacheRead,
       tokensCacheWrite: usage.tokens.cacheWrite,
+      weightedTokens: totals.weightedTokens,
       costUsd: usage.costUsd,
       costSource: usage.costSource,
+      budgetUnit: reservePlan.unit,
+      reservedWeightedTokens: reservePlan.tokens,
+      reservedCostUsd: reservePlan.costUsd,
+      reservationSource: reservePlan.source,
+      overrunRatio: reservedBudget > 0 ? usedBudget / reservedBudget : null,
       error,
     }).catch(() => undefined);
   };
@@ -435,8 +447,8 @@ async function runOne(
       planId: plan.id,
       phase: task.phase,
       taskId: taskRow.id,
-      tokens: reserveTokens,
-      costUsd: reserveCost,
+      tokens: reservePlan.tokens,
+      costUsd: reservePlan.costUsd,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -449,28 +461,42 @@ async function runOne(
       finishedAt: new Date().toISOString(),
     }).catch(() => undefined);
     await deps.planStore.updatePlanTask(plan.id, task.id, {
-      status: "failed",
+      status: task.status === "ready" ? "ready" : "pending",
+      attempts: task.attempts,
       lastError: message,
-      finishedAt: new Date().toISOString(),
+      finishedAt: null,
     }).catch(() => undefined);
-    return { task_id: task.id, status: "failed", error: message };
+    return {
+      task_id: task.id,
+      status: "budget_approval_required",
+      requires_budget_approval: true,
+      error: message,
+    };
   }
   if (!reservation.ok) {
-    const message = `Presupuesto insuficiente: la reserva de ${reserveTokens} tokens / ${reserveCost.toFixed(4)} USD no cabe en el saldo global, de fase o de tarea.`;
+    const message = `Presupuesto insuficiente: la reserva de ${reservePlan.tokens} tokens ponderados / ${reservePlan.costUsd.toFixed(4)} USD no cabe en el saldo global, de fase o de tarea.`;
     await closeExecution("budget_rejected", emptyUsage(null), message);
     await deps.planStore.updateSubtaskRun(run.id, {
       status: "failed",
       summary: message,
-      result: { error: message, reservation },
+      result: { error: message, reservation, reserve_plan: reservePlan },
       usage: emptyUsage(null),
       finishedAt: new Date().toISOString(),
     }).catch(() => undefined);
     await deps.planStore.updatePlanTask(plan.id, task.id, {
-      status: "failed",
+      status: task.status === "ready" ? "ready" : "pending",
+      attempts: task.attempts,
       lastError: message,
-      finishedAt: new Date().toISOString(),
+      finishedAt: null,
     }).catch(() => undefined);
-    return { task_id: task.id, status: "failed", error: message, reservation };
+    return {
+      task_id: task.id,
+      status: "budget_approval_required",
+      requires_budget_approval: true,
+      error: message,
+      reservation,
+      reserve_plan: reservePlan,
+    };
   }
   budgetReserved = true;
 
@@ -483,7 +509,6 @@ async function runOne(
     `Descripción: ${task.description}`,
     `Criterio de aceptación: ${task.acceptanceCriteria}`,
     `Modelo asignado: ${selection.model}`,
-    `Presupuesto de la tarea: ${selection.maxTokens ?? "sin límite"} tokens / ${selection.maxCostUsd ?? "sin límite"} USD`,
     `Archivos permitidos (globs): ${task.filesOwned.join(", ")}`,
     `No ejecutes shell, no lances subagentes, no edites fuera de los archivos permitidos y no hagas push.`,
     `No commitees: el orquestador hará un commit controlado de tus cambios en esta rama.`,
@@ -516,11 +541,20 @@ async function runOne(
       : null;
     const usage = snapshot ? captureUsage(snapshot, price, sessionID) : emptyUsage(sessionID);
     const totals = usageTotals(usage);
+    const planLimit = reservePlan.unit === "cost" ? reservePlan.costUsd : reservePlan.tokens;
+    const planUsed = reservePlan.unit === "cost" ? totals.costUsd : totals.weightedTokens;
     const budgetError =
-      (selection.maxTokens !== null && totals.tokens > selection.maxTokens) ||
-      (selection.maxCostUsd !== null && totals.costUsd > selection.maxCostUsd)
-        ? `Presupuesto excedido: ${totals.tokens} tokens / ${totals.costUsd.toFixed(4)} USD; límite ${selection.maxTokens ?? "sin límite"} tokens / ${selection.maxCostUsd ?? "sin límite"} USD.`
+      (selection.tokenBudget !== null && totals.weightedTokens > selection.tokenBudget) ||
+      (selection.maxCostUsd !== null && totals.costUsd > selection.maxCostUsd) ||
+      (planLimit > 0 && planUsed > planLimit)
+        ? `Presupuesto excedido: ${totals.weightedTokens} tokens ponderados / ${totals.costUsd.toFixed(4)} USD; reserva ${reservePlan.tokens} / ${reservePlan.costUsd.toFixed(4)} USD.`
         : null;
+    const budgetWarningList = await budgetWarnings(deps.mam, {
+      projectId: project.projectId,
+      planId: plan.id,
+      phase: task.phase,
+      taskId: taskRow.id,
+    }, reservePlan.unit);
 
     const base = await resolveBaseBranch(worktree, profile);
     const filesBefore = await changedFiles(worktree, base);
@@ -622,7 +656,20 @@ async function runOne(
       lastError: null,
       finishedAt: new Date().toISOString(),
     });
-    return { task_id: task.id, status: "review", session_id: sessionID, worktree, branch, files, commit, summary: summary.slice(0, 2_000), model: effectiveTask.model, selection_reason: selection.reason };
+    return {
+      task_id: task.id,
+      status: "review",
+      session_id: sessionID,
+      worktree,
+      branch,
+      files,
+      commit,
+      summary: summary.slice(0, 2_000),
+      model: effectiveTask.model,
+      selection_reason: selection.reason,
+      reserve_plan: reservePlan,
+      budget_warnings: budgetWarningList,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const escalate = attempts >= 2;
@@ -839,8 +886,8 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
           executionId: string;
           budgetReserved: boolean;
           closed: boolean;
-          reserveTokens: number;
-          reserveCost: number;
+          reservePlan: ReservePlan;
+          warnings: string[];
         };
         const planned: PlannedReview[] = [];
 
@@ -853,8 +900,11 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
           if (entry.closed) return;
           entry.closed = true;
           const totals = usageTotals(usage);
+          const usedBudget = entry.reservePlan.unit === "cost" ? totals.costUsd : totals.weightedTokens;
+          const reservedBudget =
+            entry.reservePlan.unit === "cost" ? entry.reservePlan.costUsd : entry.reservePlan.tokens;
           if (entry.budgetReserved) {
-            await settleExecution(deps.mam, entry.executionId, totals.tokens, totals.costUsd).catch(() => undefined);
+            await settleExecution(deps.mam, entry.executionId, totals.weightedTokens, totals.costUsd).catch(() => undefined);
           } else {
             await releaseExecution(deps.mam, entry.executionId).catch(() => undefined);
           }
@@ -865,8 +915,14 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
             tokensReasoning: usage.tokens.reasoning,
             tokensCacheRead: usage.tokens.cacheRead,
             tokensCacheWrite: usage.tokens.cacheWrite,
+            weightedTokens: totals.weightedTokens,
             costUsd: usage.costUsd,
             costSource: usage.costSource,
+            budgetUnit: entry.reservePlan.unit,
+            reservedWeightedTokens: entry.reservePlan.tokens,
+            reservedCostUsd: entry.reservePlan.costUsd,
+            reservationSource: entry.reservePlan.source,
+            overrunRatio: reservedBudget > 0 ? usedBudget / reservedBudget : null,
             error,
             gateRunId,
           }).catch(() => undefined);
@@ -906,14 +962,14 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
             }
             return fail(`El modelo ${role} (${selection.model}) es de la misma familia que el autor (${task.model}).`);
           }
-          const reserveTokens = estimateReserveTokens(task.difficulty, selection.maxTokens);
-          const reserveCost = await estimateReserveCost(
-            deps.mam.store,
-            selection.providerId,
-            selection.modelId,
-            reserveTokens,
-            selection.maxCostUsd,
-          );
+          const reservePlan = await calibrateReservePlan(deps.mam.store, {
+            role,
+            difficulty: task.difficulty,
+            providerId: selection.providerId,
+            modelId: selection.modelId,
+            assignmentTokenBudget: selection.tokenBudget,
+            assignmentMaxCostUsd: selection.maxCostUsd,
+          });
           let executionId: string;
           try {
             executionId = await deps.mam.store.startExecution({
@@ -937,8 +993,11 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
                 review_role: role,
                 iteration,
                 plan_task_id: taskId,
-                reserved_tokens: reserveTokens,
-                reserved_cost_usd: reserveCost,
+                reserved_weighted_tokens: reservePlan.tokens,
+                reserved_cost_usd: reservePlan.costUsd,
+                budget_unit: reservePlan.unit,
+                reservation_source: reservePlan.source,
+                history_runs: reservePlan.historyRuns,
               },
             });
           } catch (error) {
@@ -954,8 +1013,8 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
             executionId,
             budgetReserved: false,
             closed: false,
-            reserveTokens,
-            reserveCost,
+            reservePlan,
+            warnings: [],
           };
           planned.push(entry);
           try {
@@ -965,23 +1024,43 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
               planId,
               phase: task.phase,
               taskId: task.taskId,
-              tokens: reserveTokens,
-              costUsd: reserveCost,
+              tokens: reservePlan.tokens,
+              costUsd: reservePlan.costUsd,
             });
             if (!reservation.ok) {
-              const message = `Presupuesto insuficiente para el revisor ${role}: ${reserveTokens} tokens / ${reserveCost.toFixed(4)} USD.`;
+              const message = `Presupuesto insuficiente para el revisor ${role}: ${reservePlan.tokens} tokens ponderados / ${reservePlan.costUsd.toFixed(4)} USD.`;
               for (const item of planned) {
                 await closeOne(item, "budget_rejected", emptyUsage(null), message);
               }
-              return fail(message);
+              return ok({
+                plan_id: planId,
+                task_id: taskId,
+                status: "budget_approval_required",
+                requires_budget_approval: true,
+                error: `${message} Amplía el presupuesto y reintenta; la tarea queda en review.`,
+                reserve_plan: reservePlan,
+                planned: planned.map((item) => ({ role: item.role, model: item.selection.model })),
+              });
             }
             entry.budgetReserved = true;
+            entry.warnings = await budgetWarnings(deps.mam, {
+              projectId: project.projectId,
+              planId,
+              phase: task.phase,
+              taskId: task.taskId,
+            }, reservePlan.unit);
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             for (const item of planned) {
               await closeOne(item, "budget_error", emptyUsage(null), message);
             }
-            return fail(message);
+            return ok({
+              plan_id: planId,
+              task_id: taskId,
+              status: "budget_approval_required",
+              requires_budget_approval: true,
+              error: message,
+            });
           }
         }
 
@@ -1046,9 +1125,14 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
               : null;
             const usage = snapshot ? captureUsage(snapshot, price, sessionID) : emptyUsage(sessionID);
             const totals = usageTotals(usage);
+            const planLimit =
+              entry.reservePlan.unit === "cost" ? entry.reservePlan.costUsd : entry.reservePlan.tokens;
+            const planUsed =
+              entry.reservePlan.unit === "cost" ? totals.costUsd : totals.weightedTokens;
             const exceeded =
-              (entry.selection.maxTokens !== null && totals.tokens > entry.selection.maxTokens) ||
-              (entry.selection.maxCostUsd !== null && totals.costUsd > entry.selection.maxCostUsd);
+              (entry.selection.tokenBudget !== null && totals.weightedTokens > entry.selection.tokenBudget) ||
+              (entry.selection.maxCostUsd !== null && totals.costUsd > entry.selection.maxCostUsd) ||
+              (planLimit > 0 && planUsed > planLimit);
             await closeOne(
               entry,
               exceeded ? "budget_exceeded" : "done",
@@ -1061,8 +1145,10 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
               session_id: sessionID,
               usage,
               budget_exceeded: exceeded,
-              max_tokens: entry.selection.maxTokens,
+              token_budget: entry.selection.tokenBudget,
               max_cost_usd: entry.selection.maxCostUsd,
+              reserve_plan: entry.reservePlan,
+              budget_warnings: entry.warnings,
             };
           }));
         } catch (error) {
@@ -1077,14 +1163,21 @@ export function createSubtaskTools(deps: SubtaskToolsDeps): ToolDef[] {
         if (exceededSessions.length > 0) {
           const message = `Presupuesto excedido en revisiones: ${exceededSessions
             .map((session) => String(session.role))
-            .join(", ")}.`;
+            .join(", ")}. La tarea queda en review; amplía el presupuesto y reintenta.`;
           await deps.planStore.updatePlanTask(planId, taskId, {
-            status: "blocked",
+            status: "review",
             reviewRoute: route,
             result: { ...task.result, reviews: [], review_sessions: sessions },
             lastError: message,
           });
-          return fail(message);
+          return ok({
+            plan_id: planId,
+            task_id: taskId,
+            status: "budget_exceeded",
+            requires_budget_approval: true,
+            error: message,
+            sessions,
+          });
         }
 
         const latest = await deps.db.getReviewsForGate(task.taskId!, gateRunId, iteration);

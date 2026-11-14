@@ -450,12 +450,12 @@ export function createFactoryRpcHandlers(deps: FactoryRpcDeps) {
         planId: asString(input.plan_id) || null,
         phase: typeof input.phase === "number" ? Math.round(input.phase) : null,
         taskId: asString(input.task_id) || null,
-        maxTokens: typeof input.max_tokens === "number" ? Math.round(input.max_tokens) : null,
+        tokenBudget: typeof input.token_budget === "number" ? Math.round(input.token_budget) : null,
         maxCostUsd: typeof input.max_cost_usd === "number" ? input.max_cost_usd : null,
       });
       await mam.store.audit("budget.set", budget.key, {
         scope,
-        maxTokens: budget.maxTokens,
+        tokenBudget: budget.tokenBudget,
         maxCostUsd: budget.maxCostUsd,
       });
       return { saved: true, budget };

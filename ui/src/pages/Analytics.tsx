@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { BarChart3, DollarSign, Gauge, Wrench } from "lucide-react";
 import {
   Bar,
@@ -18,7 +18,7 @@ import { Badge, EmptyState, ErrorState, PageHeader, Section, Spinner, StatCard }
 import { api } from "../lib/api";
 import { formatCompact, formatNumber, formatUsd } from "../lib/format";
 import { rpc } from "../lib/rpc";
-import type { AnalyticsSummary, ModelHistoryRecord, SessionStats } from "../lib/types";
+import type { AnalyticsSummary, CatalogModel, ModelHistoryRecord, SessionStats } from "../lib/types";
 
 const tooltipStyle = {
   background: "#0f131a",
@@ -40,6 +40,11 @@ export function AnalyticsPage() {
     enabled: Boolean(projectId),
   });
   const stats = useQuery({ queryKey: ["opencode", "stats", directory ?? "default"], queryFn: () => api.stats(directory) });
+  const catalog = useQuery({
+    queryKey: ["factory", "models", directory ?? "default"],
+    queryFn: () => rpc<{ count: number; models: CatalogModel[] }>("models.list", { limit: 2000 }, directory),
+    enabled: Boolean(projectId),
+  });
   const history = useQuery({
     queryKey: ["factory", "model-history", historyRole, directory ?? "default"],
     queryFn: () =>
@@ -62,6 +67,65 @@ export function AnalyticsPage() {
   const toolSuccess = stats.data
     ? Math.round((stats.data.tools.totals.succeeded / Math.max(stats.data.tools.totals.calls, 1)) * 100)
     : 0;
+
+  const opencodeUsage = useMemo(() => {
+    const prices = new Map(
+      (catalog.data?.models ?? []).map((model) => [
+        `${model.providerId}/${model.modelId}`,
+        model,
+      ]),
+    );
+    const grouped = new Map<string, {
+      model: string;
+      providers: Set<string>;
+      steps: number;
+      tokensInput: number;
+      tokensCacheRead: number;
+      tokensOutput: number;
+      cost: number;
+    }>();
+    for (const row of stats.data?.models ?? []) {
+      const key = `${row.model.providerID}/${row.model.id}`;
+      const price = prices.get(key);
+      const tokens = row.tokens;
+      const estimated =
+        row.cost > 0
+          ? row.cost
+          : price
+            ? (tokens.input * (price.costInput ?? 0) +
+                (tokens.output + tokens.reasoning) * (price.costOutput ?? 0) +
+                (tokens.cache?.read ?? 0) * (price.costCacheRead ?? 0) +
+                (tokens.cache?.write ?? 0) * (price.costCacheWrite ?? 0)) /
+              1_000_000
+            : 0;
+      const modelId = row.model.id;
+      const bucket = grouped.get(modelId) ?? {
+        model: modelId,
+        providers: new Set<string>(),
+        steps: 0,
+        tokensInput: 0,
+        tokensCacheRead: 0,
+        tokensOutput: 0,
+        cost: 0,
+      };
+      bucket.providers.add(row.model.providerID);
+      bucket.steps += row.steps;
+      bucket.tokensInput += tokens.input;
+      bucket.tokensCacheRead += tokens.cache?.read ?? 0;
+      bucket.tokensOutput += tokens.output + tokens.reasoning;
+      bucket.cost += estimated;
+      grouped.set(modelId, bucket);
+    }
+    const rows = [...grouped.values()].sort((left, right) => right.cost - left.cost);
+    return {
+      rows,
+      totalCost: rows.reduce((sum, row) => sum + row.cost, 0),
+      totalTokens: rows.reduce(
+        (sum, row) => sum + row.tokensInput + row.tokensCacheRead + row.tokensOutput,
+        0,
+      ),
+    };
+  }, [stats.data, catalog.data]);
 
   const byDay = (analytics.data?.by_day ?? []).map((row) => ({
     day: row.day,
@@ -96,7 +160,13 @@ export function AnalyticsPage() {
       ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Coste 30 días" value={formatUsd(cost)} hint="subtasks + revisiones" icon={<DollarSign size={15} />} tone="success" />
+        <StatCard
+          label="Coste OpenCode (est.)"
+          value={formatUsd(opencodeUsage.totalCost)}
+          hint={`fábrica: ${formatUsd(cost)}`}
+          icon={<DollarSign size={15} />}
+          tone="success"
+        />
         <StatCard label="Ejecuciones" value={formatNumber(totalRuns)} hint="subtasks y reviews" icon={<BarChart3 size={15} />} />
         <StatCard label="Tokens" value={formatCompact(totalTokens)} hint="entrada + salida" icon={<Gauge size={15} />} tone="violet" />
         <StatCard
@@ -179,6 +249,62 @@ export function AnalyticsPage() {
               </tbody>
             </table>
           </div>
+        )}
+      </Section>
+
+      <Section
+        title="Uso de OpenCode (todas las sesiones)"
+        description="Estimación con la tabla de precios versionada. Agrupa variantes/versiones por ID de modelo; puede diferir de la facturación."
+      >
+        {stats.isLoading || catalog.isLoading ? (
+          <div className="p-6">
+            <Spinner />
+          </div>
+        ) : stats.isError ? (
+          <ErrorState error={stats.error} onRetry={() => void stats.refetch()} />
+        ) : opencodeUsage.rows.length === 0 ? (
+          <EmptyState title="Sin uso" description="No hay sesiones de OpenCode con tokens registrados." />
+        ) : (
+          <>
+            <div className="grid gap-3 border-b border-line-soft px-4 py-3 sm:grid-cols-2">
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.08em] text-faint">Coste estimado</div>
+                <div className="mt-1 text-xl font-semibold text-success">{formatUsd(opencodeUsage.totalCost)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.08em] text-faint">Tokens totales</div>
+                <div className="mt-1 text-xl font-semibold text-ink">{formatCompact(opencodeUsage.totalTokens)}</div>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-left">
+                <thead className="bg-carbon-850">
+                  <tr>
+                    <th className="table-head px-4 py-2.5">Modelo</th>
+                    <th className="table-head px-4 py-2.5">Proveedores</th>
+                    <th className="table-head px-4 py-2.5">Steps</th>
+                    <th className="table-head px-4 py-2.5">Input</th>
+                    <th className="table-head px-4 py-2.5">Cache read</th>
+                    <th className="table-head px-4 py-2.5">Output</th>
+                    <th className="table-head px-4 py-2.5">Coste estimado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {opencodeUsage.rows.map((row) => (
+                    <tr key={row.model} className="table-row">
+                      <td className="px-4 py-2.5 font-mono text-[11px] text-ink">{row.model}</td>
+                      <td className="px-4 py-2.5 text-[11px] text-muted">{[...row.providers].join(", ")}</td>
+                      <td className="px-4 py-2.5 text-[11px] text-muted">{formatNumber(row.steps)}</td>
+                      <td className="px-4 py-2.5 text-[11px] text-muted">{formatCompact(row.tokensInput)}</td>
+                      <td className="px-4 py-2.5 text-[11px] text-muted">{formatCompact(row.tokensCacheRead)}</td>
+                      <td className="px-4 py-2.5 text-[11px] text-muted">{formatCompact(row.tokensOutput)}</td>
+                      <td className="px-4 py-2.5 text-[11px] text-muted">{formatUsd(row.cost)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </Section>
 

@@ -16,6 +16,7 @@ Fábrica de software genérica para OpenCode V2. Instalación global en `~/.conf
 | `product-analyst` | subagent | `opencode-go/glm-5.3` | Requisitos y criterios verificables; no decide arquitectura. |
 | `architect` | subagent | `opencode-go/glm-5.3` | Diseño, contratos y ADR; no implementa. |
 | `tech-writer` | subagent | `opencode-go/glm-5.3-flash` | README, CHANGELOG, guías y runbooks; no cambia especificaciones. |
+| `devops-engineer` | subagent | `opencode-go/glm-5.3` | Docker, CI/CD, entornos, health checks y rollback; no despliega producción sin aprobación. |
 
 | Tool | Qué hace |
 |---|---|
@@ -66,6 +67,7 @@ Los procedimientos largos viven en `~/.config/opencode/skills/` y se cargan bajo
 - `factory-git-safety`
 - `factory-phase-orchestration`
 - `factory-pipeline`
+- `factory-deployment`
 - `factory-closure-report`
 
 El prompt de `factory` solo indica cuándo cargar cada una. Se pueden editar sin tocar el agente.
@@ -189,10 +191,11 @@ locales configurados por ese plugin). Solo añade:
 No modifica `memories` ni `capture_state`. Migraciones idempotentes:
 `plugins/factory/migrations/001_factory.sql`, `002_quality_gates.sql`,
 `003_usage.sql`, `004_orchestration.sql`, `005_review_severity.sql` y
-`006_model_agent_management.sql` y `007_execution_budgets.sql`
-(`schema_version=7`). La 006 añade catálogo MAM, perfiles, asignaciones,
-auditoría y registro de ejecución; la 007 añade presupuestos, reservas atómicas
-y precios versionados.
+`006_model_agent_management.sql`, `007_execution_budgets.sql` y
+`008_budget_units.sql` (`schema_version=8`). La 006 añade catálogo MAM, perfiles,
+asignaciones, auditoría y registro de ejecución; la 007 añade presupuestos,
+reservas atómicas y precios versionados; la 008 renombra `max_tokens` a
+`token_budget`, separa tokens ponderados y registra sobreconsumo.
 
 Se puede cambiar la base con `FACTORY_DATABASE_URL` o
 `OPENCODE_MEMORY_DATABASE_URL`; nunca se registra la URL completa.

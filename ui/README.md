@@ -60,14 +60,14 @@ No publiques la consola en `0.0.0.0` sin poner delante autenticación y TLS.
 | Ruta | Qué muestra |
 |---|---|
 | `/` | Estado general, sesiones, steps, coste, uso por modelo y actividad reciente. |
-| `/sessions` | Sesiones de OpenCode; abrir, cambiar agente/modelo, prompt e interrumpir. |
+| `/sessions` | Todas las sesiones de OpenCode (hasta 500); abrir, cambiar agente/modelo, prompt e interrumpir. |
 | `/work` | Tareas, planes, gates, revisiones, presupuesto global y execution log. |
 | `/agents` | Selección de agentes por proyecto, modo manual/híbrido/auto y modelo activo. |
 | `/models` | Catálogo real, perfiles, política y asignación de modelo/presupuesto por rol. |
 | `/memory` | Memoria vectorial: auditoría, búsqueda textual, metadatos y borrado. |
 | `/projects` | Proyectos conocidos por OpenCode. |
 | `/skills` | Skills disponibles y su origen. |
-| `/analytics` | Coste, tokens, ejecuciones, tool success e historial por modelo/rol. |
+| `/analytics` | Coste de fábrica, uso estimado de todas las sesiones de OpenCode, tool success e historial por modelo/rol. |
 | `/settings` | Salud de la fábrica, proveedores, MCP y configuración en solo lectura. |
 
 ## Model & Agent Management
@@ -87,7 +87,10 @@ No publiques la consola en `0.0.0.0` sin poner delante autenticación y TLS.
 - **Política editable**: proveedores/modelos permitidos, modelos prohibidos,
   contexto mínimo y exigencia de tools.
 - **Presupuesto**: límites por asignación en Models y presupuesto global en Work;
-  la reserva real es atómica en `subtask_run`/`review_run`.
+  la reserva real es atómica en `subtask_run`/`review_run`. La unidad es coste si
+  hay precio versionado y tokens ponderados si no. `token_budget` no es un límite
+  de salida de la API. Hay aviso al 80 % y el sobreconsumo repetido >1,5x se
+  detecta en `factory_doctor`.
 - **Modos de modelo**: manual (modelo fijado por rol), auto (código + política +
   historial) e híbrido (auto con aprobación en tareas sensibles o caras).
 - **Selección de agentes**: manual, híbrido o auto; se aplica a la sesión como

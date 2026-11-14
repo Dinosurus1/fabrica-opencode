@@ -104,3 +104,26 @@ export function captureUsage(
     costBasis: "sin precio en el catálogo y proveedor sin costo reportado",
   };
 }
+
+/**
+ * Pesos de tokens para presupuestar modelos sin precio (Ollama, tarifa plana).
+ * No son una factura: aproximan el coste relativo de cada tipo de token.
+ * Entrada fresca = 1; caché leída = 0,25; caché escrita = 1,25;
+ * salida y razonamiento = 4.
+ */
+export const TOKEN_WEIGHTS = {
+  input: 1,
+  cacheRead: 0.25,
+  cacheWrite: 1.25,
+  output: 4,
+  reasoning: 4,
+} as const;
+
+export function weightedTokens(tokens: TokenUsage): number {
+  return Math.round(
+    tokens.input * TOKEN_WEIGHTS.input +
+      tokens.cacheRead * TOKEN_WEIGHTS.cacheRead +
+      tokens.cacheWrite * TOKEN_WEIGHTS.cacheWrite +
+      (tokens.output + tokens.reasoning) * TOKEN_WEIGHTS.output,
+  );
+}

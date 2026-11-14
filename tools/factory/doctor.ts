@@ -44,6 +44,7 @@ const EXPECTED_AGENTS: Record<string, string> = {
   "product-analyst": "opencode-go/glm-5.3",
   architect: "opencode-go/glm-5.3",
   "tech-writer": "opencode-go/glm-5.3-flash",
+  "devops-engineer": "opencode-go/glm-5.3",
 };
 
 const EXPECTED_TOOLS = [
@@ -193,7 +194,7 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
           try {
             const version = await deps.db.getMeta("schema_version");
             const numeric = Number(version);
-            add("migración:schema_version", numeric === 7 ? "ok" : "error", `schema_version=${String(version ?? "desconocida")}; esperado 7`);
+            add("migración:schema_version", numeric === 8 ? "ok" : "error", `schema_version=${String(version ?? "desconocida")}; esperado 8`);
           } catch (error) {
             add("migración:schema_version", "error", error instanceof Error ? error.message : String(error));
           }
@@ -233,14 +234,19 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
             ["factory_models", "cost_input"],
             ["factory_execution_profiles", "is_default"],
             ["factory_profile_assignments", "locked"],
+            ["factory_profile_assignments", "token_budget"],
             ["factory_execution_log", "cost_usd"],
             ["factory_execution_log", "project_id"],
             ["factory_execution_log", "parent_execution_id"],
             ["factory_execution_log", "selection_reason"],
             ["factory_execution_log", "price_version"],
-            ["factory_budgets", "max_tokens"],
-            ["factory_budgets", "reserved_tokens"],
+            ["factory_execution_log", "weighted_tokens"],
+            ["factory_execution_log", "budget_unit"],
+            ["factory_execution_log", "overrun_ratio"],
+            ["factory_budgets", "token_budget"],
+            ["factory_budgets", "reserved_weighted_tokens"],
             ["factory_budget_reservations", "status"],
+            ["factory_budget_reservations", "reserved_weighted_tokens"],
             ["factory_model_prices", "version"],
           ] as const) {
             try {
@@ -329,6 +335,19 @@ export function createDoctorTools(deps: DoctorDeps): ToolDef[] {
               staleReservations.length > 0
                 ? `${staleReservations.length} reserva(s) sin liquidar > 90 min; revisa presupuestos`
                 : "sin reservas abiertas",
+            );
+            const overruns = await deps.mam.store.overrunRoles();
+            add(
+              "budget:sobreconsumo",
+              overruns.length > 0 ? "warn" : "ok",
+              overruns.length > 0
+                ? overruns
+                    .map(
+                      (item) =>
+                        `${item.role}: ${item.overruns}/${item.runs} ejecuciones > 1,5x la reserva`,
+                    )
+                    .join(" · ")
+                : "sin sobreconsumo repetido",
             );
           } catch (error) {
             add("execution:diagnóstico", "warn", error instanceof Error ? error.message : String(error));

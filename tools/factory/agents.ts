@@ -30,6 +30,7 @@ export const AGENT_CATALOG: AgentCatalogEntry[] = [
   { agentId: "product-analyst", role: "analysis", description: "Requisitos y criterios verificables." },
   { agentId: "architect", role: "architecture", description: "Diseño, contratos y ADR." },
   { agentId: "tech-writer", role: "documentation", description: "README, CHANGELOG, guías y runbooks." },
+  { agentId: "devops-engineer", role: "devops", description: "Docker, CI/CD, entornos, health checks y rollback." },
   { agentId: "helper", role: "assistance", description: "Segunda opinión y documentación con citas." },
   { agentId: "researcher", role: "research", description: "Información cambiante con fuentes." },
 ];

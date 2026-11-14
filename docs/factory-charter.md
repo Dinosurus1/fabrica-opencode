@@ -84,6 +84,7 @@ ni arquitectura; un proyecto nuevo o un cambio que cruza módulos sí.
 | `security-reviewer` | Diff con superficie sensible | Hallazgos de seguridad con evidencia | No corrige código |
 | `plan-reviewer` | Antes de aprobar un plan por fases | Veredicto del plan y hallazgos | No edita el plan ni lo aprueba |
 | `tech-writer` | Entrega, handoff o documentación desactualizada | README, CHANGELOG, guías y runbooks | No cambia especificaciones ni inventa comportamiento |
+| `devops-engineer` | Release, Docker/CI, health checks o rollback | Cambios de infra/CI, runbook y rollback probado | No despliega producción sin aprobación humana |
 | `helper` | Segunda opinión breve o documentación con citas | Respuesta acotada | No sustituye compuertas ni revisiones |
 | `researcher` | Información cambiante fuera de la documentación oficial | Hallazgos con fuentes | No decide arquitectura ni implementa |
 | `explore` | Búsqueda rápida en el código | Rutas y hallazgos | No edita |
@@ -158,10 +159,13 @@ Tres niveles: proyecto, fase y agente. Distribución ilustrativa, no universal:
   código con política, factibilidad, presupuesto e historial; `hybrid` es auto con
   aprobación en tareas sensibles, modelos más caros o reintentos. El LLM solo
   clasifica la dificultad.
-- **Reserva atómica:** `subtask_run`/`review_run` reservan tokens/coste en
-  global, fase y tarea antes de crear la sesión, y liquidan el uso real al
-  terminar. Si la reserva no cabe, no se lanza. En proveedores de tarifa plana o
-  gratuitos, `max_tokens` es el límite principal.
+- **Reserva atómica:** `subtask_run`/`review_run` reservan en global, fase y
+  tarea antes de crear la sesión, y liquidan el uso real al terminar. La unidad
+  es coste si hay precio versionado; tokens ponderados si no. Si no cabe, la
+  tarea queda pendiente/en review y se pide ampliar, no se mata. Aviso al 80 %;
+  sobreconsumo repetido >1,5x lo detecta el doctor y recalibra con el percentil 90
+  histórico cuando hay suficientes ejecuciones. `token_budget` no es un límite de
+  salida de la API.
 - **Execution log:** cada ejecución deja una fila al empezar y otra al terminar,
   con agente, modelo, modo, motivo de selección, tokens, coste, estado, intento,
   error, versiones y gate. Alimenta la evaluación de modelos y el coste por tarea.

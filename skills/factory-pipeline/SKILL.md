@@ -42,6 +42,10 @@ decisión.
 La etapa 9 puede ocurrir antes del cierre o después de una fase; no bloquea el
 desarrollo si no hay cambios de comportamiento que documentar.
 
+**Despliegue:** si la tarea es un release, un cambio de infraestructura o un
+rollback, activa `@devops-engineer` y carga `factory-deployment`. Producción
+exige aprobación humana explícita, health check y rollback probado.
+
 ## 3. Activación de roles
 
 ### `@product-analyst`
@@ -92,6 +96,18 @@ Entregable: `docs/architecture.md` y uno o más ADR en `docs/decisions/` con:
 
 Compuerta: los contratos y módulos afectados están definidos, las decisiones
 tienen ADR y no hay código de producto. **No implementa ni cambia requisitos.**
+
+### `@devops-engineer`
+
+Actívalo cuando:
+
+- Hay que preparar un release o un rollback.
+- Hay que tocar Docker, CI/CD, infraestructura o entornos.
+- Hace falta un runbook con health checks y rollback.
+
+Entregable: cambios de infraestructura/CI, `docs/runbooks/**`, health check,
+smoke test y rollback probado en staging. **No despliega a producción sin
+aprobación humana.**
 
 ### `@tech-writer`
 
@@ -155,7 +171,7 @@ Hay dos modos distintos; no los mezcles:
 
 - **Agentes**: `factory_agents_get` → `factory_agents_propose` → `factory_agents_select` → `factory_agents_apply`. Antes de lanzar un subagente, `factory_agents_check`; si no está aprobado, pide permiso.
 - **Modelo**: `manual` usa el modelo asignado; `auto` elige con política, presupuesto e historial; `hybrid` exige `confirmed=true` en tareas sensibles, modelos más caros o reintentos.
-- **Presupuesto**: `budget_set` global/fase/tarea; `subtask_run`/`review_run` reservan antes de crear la sesión y liquidan al terminar. Si no hay saldo, no se lanza.
+- **Presupuesto**: `budget_set` global/fase/tarea; `subtask_run`/`review_run` reservan antes de crear la sesión y liquidan al terminar. El `token_budget` es ponderado y no es un límite de salida. Si no hay saldo, la tarea queda pendiente/en review y se pide ampliar; no se marca fallida. Si hay `budget_warnings` (≥80 %) avisa al usuario.
 - **Evidencia**: `executions_list` y `model_history` muestran agente, modelo, tokens, coste, estado, intento y motivo. La métrica es coste por tarea terminada correctamente.
 
 ## 7. Salida del orquestador

@@ -96,10 +96,12 @@ generan avisos y mezclar V1/V2 en un mismo fichero hace que se ignoren campos.
 - **Selección de agentes** por proyecto (manual/híbrido/auto) aplicada como
   reglas `subagent` de la sesión.
 - **Presupuestos** global/fase/tarea con reserva atómica y liquidación al
-  terminar; `max_tokens` como límite principal.
+  terminar; `token_budget` ponderado como límite principal, sin enviarlo al modelo.
 - **Execution log** con inicio/fin, modelo, modo, motivo, tokens, coste, estado,
   intento, error, versiones y gate; alimenta Analytics y la evaluación de modelos.
 - **Skills acotadas por agente** con reglas `skill` V2.
+- **Despliegue/rollback** con `devops-engineer` y `factory-deployment`, aprobación
+  humana, health checks y rollback probado.
 
 ## Pendiente / siguiente iteración
 

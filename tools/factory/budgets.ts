@@ -46,7 +46,7 @@ export function createBudgetTools(deps: BudgetToolsDeps): ToolDef[] {
           plan_id: { type: "string" },
           phase: { type: "integer", minimum: 0 },
           task_id: { type: "string" },
-          max_tokens: { type: "integer", minimum: 0 },
+          token_budget: { type: "integer", minimum: 0 },
           max_cost_usd: { type: "number", minimum: 0 },
           confirmed: { type: "boolean", default: false },
         },
@@ -76,12 +76,12 @@ export function createBudgetTools(deps: BudgetToolsDeps): ToolDef[] {
             planId: typeof input.plan_id === "string" ? input.plan_id : null,
             phase: typeof input.phase === "number" ? input.phase : null,
             taskId: typeof input.task_id === "string" ? input.task_id : null,
-            maxTokens: typeof input.max_tokens === "number" ? Math.round(input.max_tokens) : null,
+            tokenBudget: typeof input.token_budget === "number" ? Math.round(input.token_budget) : null,
             maxCostUsd: typeof input.max_cost_usd === "number" ? input.max_cost_usd : null,
           });
           await deps.mam.store.audit("budget.set", budget.key, {
             scope,
-            maxTokens: budget.maxTokens,
+            tokenBudget: budget.tokenBudget,
             maxCostUsd: budget.maxCostUsd,
           });
           return ok({ saved: true, budget });

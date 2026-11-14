@@ -94,7 +94,7 @@ export interface ProfileAssignment {
   variant?: string | null;
   locked?: boolean;
   maxCostUsd?: number | null;
-  maxTokens?: number | null;
+  tokenBudget?: number | null;
   priority?: number;
   createdAt?: string;
   updatedAt?: string;
@@ -348,8 +348,14 @@ export interface ExecutionRecord {
   tokensReasoning: number;
   tokensCacheRead: number;
   tokensCacheWrite: number;
+  weightedTokens: number;
   costUsd: number | null;
   costSource: string | null;
+  budgetUnit: string | null;
+  reservedWeightedTokens: number | null;
+  reservedCostUsd: number | null;
+  reservationSource: string | null;
+  overrunRatio: number | null;
   status: string | null;
   error: string | null;
   gateRunId: string | null;
@@ -367,11 +373,11 @@ export interface BudgetRecord {
   planId: string | null;
   phase: number | null;
   taskId: string | null;
-  maxTokens: number | null;
+  tokenBudget: number | null;
   maxCostUsd: number | null;
-  reservedTokens: number;
+  reservedWeightedTokens: number;
   reservedCostUsd: number;
-  spentTokens: number;
+  spentWeightedTokens: number;
   spentCostUsd: number;
   createdAt: string;
   updatedAt: string;
