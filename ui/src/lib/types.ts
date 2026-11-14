@@ -307,6 +307,7 @@ export interface SessionMessage {
   content?: MessagePart[];
   agent?: string;
   model?: ModelRef;
+  tokens?: TokenUsage;
   time?: { created?: number; completed?: number };
   [key: string]: unknown;
 }

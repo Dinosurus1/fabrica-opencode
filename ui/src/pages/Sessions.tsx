@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   ArrowUpRight,
   Bot,
   CircleStop,
   Cpu,
+  MessageSquarePlus,
   MessagesSquare,
   Send,
   User,
@@ -16,6 +18,8 @@ import {
   Card,
   EmptyState,
   ErrorState,
+  Field,
+  Modal,
   PageHeader,
   Section,
   Spinner,
@@ -25,14 +29,78 @@ import { cn, formatCompact, formatDate, formatUsd, modelLabel, relativeTime, sho
 import { rpc } from "../lib/rpc";
 import type { CatalogModel, Session, SessionMessage } from "../lib/types";
 
+interface NewChatDraft {
+  title: string;
+  agent: string;
+  model: string;
+  prompt: string;
+}
+
+function sessionTotalTokens(session: Session): number {
+  return (session.tokens.input ?? 0) + (session.tokens.output ?? 0) + (session.tokens.reasoning ?? 0);
+}
+
+function isTemporaryDirectory(directory?: string): boolean {
+  return Boolean(directory && (directory.startsWith("/tmp/") || directory.includes("/worktrees/")));
+}
+
+function messageText(message: SessionMessage): string {
+  const parts = (message.content ?? [])
+    .filter((part) => part.type === "text" && part.text)
+    .map((part) => part.text!.trim())
+    .filter(Boolean);
+  return (parts.join("\n") || message.text || "").trim();
+}
+
+function truncate(value: string, max: number): string {
+  const clean = value.replace(/\s+/g, " ").trim();
+  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+}
+
+function lastContextTokens(messages: SessionMessage[]): number {
+  const assistant = [...messages].reverse().find((message) => message.type === "assistant" && message.tokens);
+  if (!assistant?.tokens) return 0;
+  return (
+    (assistant.tokens.input ?? 0) +
+    (assistant.tokens.cache?.read ?? 0) +
+    (assistant.tokens.cache?.write ?? 0)
+  );
+}
+
+function buildHandoffPrompt(session: Session, messages: SessionMessage[]): string {
+  const userMessages = messages
+    .filter((message) => message.type === "user")
+    .map((message) => truncate(messageText(message), 500))
+    .filter(Boolean)
+    .slice(-8);
+  const lastAssistant = [...messages]
+    .reverse()
+    .find((message) => message.type === "assistant" && messageText(message));
+  const lines = [
+    `Continuación de la sesión «${session.title ?? session.id}» (${session.id}).`,
+    `Proyecto: ${session.location?.directory ?? "—"}.`,
+    userMessages.length > 0
+      ? `Pedidos recientes:\n${userMessages.map((text) => `- ${text}`).join("\n")}`
+      : "",
+    lastAssistant
+      ? `Último estado reportado por el asistente:\n${truncate(messageText(lastAssistant), 1800)}`
+      : "",
+    "Continúa desde este punto. Antes de actuar, revisa el estado actual del repositorio y la memoria del proyecto; no repitas trabajo ya hecho. Si falta contexto, pide solo lo mínimo necesario y evita arrastrar el historial completo.",
+  ];
+  return lines.filter(Boolean).join("\n\n");
+}
+
 export function SessionsPage() {
   const { projects, projectId, project } = useProject();
   const directory = project?.canonical;
   const [onlyProject, setOnlyProject] = useState(false);
+  const [showSubagents, setShowSubagents] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [agent, setAgent] = useState("");
   const [model, setModel] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [newChat, setNewChat] = useState<NewChatDraft | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const sessions = useQuery({ queryKey: ["opencode", "sessions"], queryFn: () => api.sessions(500) });
@@ -49,10 +117,15 @@ export function SessionsPage() {
 
   const filtered = useMemo(() => {
     const list = sessions.data ?? [];
-    return (onlyProject ? list.filter((session) => session.projectID === projectId) : list).sort(
-      (left, right) => right.time.updated - left.time.updated,
-    );
-  }, [sessions.data, onlyProject, projectId]);
+    return list
+      .filter((session) => !isTemporaryDirectory(session.location?.directory))
+      .filter((session) => {
+        if (onlyProject && session.projectID !== projectId) return false;
+        if (session.parentID) return showSubagents;
+        return Boolean(session.agent) && Boolean(session.title?.trim());
+      })
+      .sort((left, right) => right.time.updated - left.time.updated);
+  }, [sessions.data, onlyProject, projectId, showSubagents]);
 
   const selected = filtered.find((session) => session.id === selectedId) ?? null;
 
@@ -98,6 +171,40 @@ export function SessionsPage() {
     onSuccess: refreshSession,
   });
 
+  const createChat = useMutation({
+    mutationFn: async (draft: NewChatDraft) => {
+      const slash = draft.model.indexOf("/");
+      const created = await api.createSession({
+        title: draft.title.trim() || truncate(draft.prompt.trim(), 60) || "Nueva sesión",
+        agent: draft.agent || undefined,
+        model:
+          slash > 0
+            ? { providerID: draft.model.slice(0, slash), id: draft.model.slice(slash + 1) }
+            : undefined,
+        directory,
+      });
+      let promptError: string | null = null;
+      if (draft.prompt.trim()) {
+        try {
+          await api.prompt(created.id, draft.prompt.trim());
+        } catch (error) {
+          promptError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      return { created, promptError };
+    },
+    onSuccess: async ({ created, promptError }) => {
+      setNewChat(null);
+      setSelectedId(created.id);
+      setNotice(promptError ? `Sesión creada, pero el primer prompt falló: ${promptError}` : null);
+      queryClient.setQueryData(["opencode", "sessions"], (current: Session[] | undefined) => [
+        created,
+        ...(current ?? []).filter((session) => session.id !== created.id),
+      ]);
+      await queryClient.invalidateQueries({ queryKey: ["opencode", "sessions"] });
+    },
+  });
+
   const modelsByProvider = useMemo(() => {
     const groups = new Map<string, CatalogModel[]>();
     for (const item of models.data?.models ?? []) {
@@ -112,25 +219,86 @@ export function SessionsPage() {
     return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right));
   }, [models.data]);
 
+  const chatAgents = useMemo(
+    () => (agents.data ?? []).filter((item) => item.mode !== "subagent"),
+    [agents.data],
+  );
+
+  const contextTokens = useMemo(() => lastContextTokens(context.data ?? []), [context.data]);
+  const contextLimit = useMemo(
+    () =>
+      (models.data?.models ?? []).find(
+        (item) => item.providerId === selected?.model?.providerID && item.modelId === selected?.model?.id,
+      )?.contextLimit ?? null,
+    [models.data, selected?.model?.id, selected?.model?.providerID],
+  );
+  const longSession = Boolean(
+    selected &&
+      (sessionTotalTokens(selected) >= 2_000_000 ||
+        (contextLimit !== null && contextLimit > 0 && contextTokens >= contextLimit * 0.6)),
+  );
+
+  const defaultChatAgent = (session: Session | null) =>
+    chatAgents.find((item) => item.id === session?.agent)?.id ?? chatAgents[0]?.id ?? "factory";
+
+  const openNewChat = () => {
+    setNotice(null);
+    setNewChat({
+      title: "",
+      agent: defaultChatAgent(selected),
+      model: selected?.model ? `${selected.model.providerID}/${selected.model.id}` : "",
+      prompt: "",
+    });
+  };
+
+  const openContinuation = () => {
+    if (!selected) return;
+    setNotice(null);
+    setNewChat({
+      title: truncate(`Continuación · ${selected.title ?? selected.id}`, 90),
+      agent: defaultChatAgent(selected),
+      model: selected.model ? `${selected.model.providerID}/${selected.model.id}` : "",
+      prompt: buildHandoffPrompt(selected, context.data ?? []),
+    });
+  };
+
   const error = sessions.error ?? agents.error ?? models.error ?? context.error;
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Sessions"
-        subtitle="Conversaciones y ejecuciones de OpenCode. Puedes abrir una sesión, cambiar agente o modelo, enviar un prompt e interrumpir."
+        subtitle="Conversaciones y ejecuciones de OpenCode. Crea chats nuevos, abre una sesión, cambia agente o modelo, envía un prompt e interrumpe."
         actions={
-          <label className="flex items-center gap-2 text-xs text-muted">
-            <input
-              type="checkbox"
-              className="size-3.5 accent-[#7c5cff]"
-              checked={onlyProject}
-              onChange={(event) => setOnlyProject(event.target.checked)}
-            />
-            Solo {project ? shortPath(project.canonical) : "proyecto actual"}
-          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button variant="primary" className="h-8 px-3 text-xs" onClick={openNewChat}>
+              <MessageSquarePlus size={13} /> Nuevo chat
+            </Button>
+            <label className="flex items-center gap-2 text-xs text-muted">
+              <input
+                type="checkbox"
+                className="size-3.5 accent-[#7c5cff]"
+                checked={onlyProject}
+                onChange={(event) => setOnlyProject(event.target.checked)}
+              />
+              Solo {project ? shortPath(project.canonical) : "proyecto actual"}
+            </label>
+            <label className="flex items-center gap-2 text-xs text-muted">
+              <input
+                type="checkbox"
+                className="size-3.5 accent-[#7c5cff]"
+                checked={showSubagents}
+                onChange={(event) => setShowSubagents(event.target.checked)}
+              />
+              Subagentes
+            </label>
+          </div>
         }
       />
+
+      {notice ? (
+        <div className="rounded-lg border border-violet/30 bg-violet/10 px-3 py-2 text-xs text-violet-soft">{notice}</div>
+      ) : null}
 
       {error ? <ErrorState error={error} onRetry={() => void sessions.refetch()} /> : null}
 
@@ -193,8 +361,9 @@ export function SessionsPage() {
                       <td className="px-4 py-3 text-[11px] text-muted">{formatUsd(session.cost)}</td>
                       <td className="px-4 py-3 text-[11px] text-muted">
                         <div>{relativeTime(session.time.updated)}</div>
-                        <div className="text-[10px] text-faint">
-                          {formatCompact(session.tokens.input + session.tokens.output)} tok
+                        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-faint">
+                          <span>{formatCompact(sessionTotalTokens(session))} tok</span>
+                          {sessionTotalTokens(session) >= 2_000_000 ? <Badge tone="warning">larga</Badge> : null}
                         </div>
                       </td>
                     </tr>
@@ -276,6 +445,32 @@ export function SessionsPage() {
                 </div>
               </div>
 
+              {longSession ? (
+                <div className="border-b border-warning/30 bg-warning/10 px-4 py-3">
+                  <div className="flex flex-wrap items-start gap-2">
+                    <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium text-warning">Sesión muy larga</p>
+                      <p className="mt-0.5 text-[11px] leading-5 text-muted">
+                        {formatCompact(sessionTotalTokens(selected))} tokens acumulados
+                        {contextLimit && contextTokens > 0
+                          ? ` · contexto ${formatCompact(contextTokens)} / ${formatCompact(contextLimit)}`
+                          : ""}. Para seguir sin arrastrar todo el historial, crea una continuación con un resumen
+                        editable de los últimos cambios.
+                      </p>
+                    </div>
+                    <Button
+                      variant="default"
+                      className="h-7 shrink-0 px-2 text-[11px]"
+                      onClick={openContinuation}
+                      disabled={context.isLoading}
+                    >
+                      <MessageSquarePlus size={12} /> Continuar en nueva sesión
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+
               <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
                 {context.isLoading ? (
                   <Spinner label="Cargando mensajes" />
@@ -322,6 +517,93 @@ export function SessionsPage() {
           )}
         </Card>
       </div>
+
+      <Modal
+        open={Boolean(newChat)}
+        title="Nuevo chat"
+        description="Crea una sesión limpia para no arrastrar el historial. Si vienes de una sesión larga, el resumen de traspaso es editable."
+        onClose={() => setNewChat(null)}
+        width="max-w-2xl"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setNewChat(null)}>
+              Cancelar
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => newChat && createChat.mutate(newChat)}
+              disabled={!newChat || createChat.isPending || !newChat.agent}
+            >
+              {createChat.isPending ? "Creando..." : "Crear chat"}
+            </Button>
+          </>
+        }
+      >
+        {newChat ? (
+          <div className="space-y-3">
+            <Field label="Título">
+              <input
+                className="field"
+                value={newChat.title}
+                onChange={(event) => setNewChat({ ...newChat, title: event.target.value })}
+                placeholder="Nueva sesión"
+              />
+            </Field>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Agente">
+                <select
+                  className="field"
+                  value={newChat.agent}
+                  onChange={(event) => setNewChat({ ...newChat, agent: event.target.value })}
+                >
+                  {chatAgents.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.id}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Modelo" hint="Si lo dejas vacío, se usa el del agente.">
+                <select
+                  className="field"
+                  value={newChat.model}
+                  onChange={(event) => setNewChat({ ...newChat, model: event.target.value })}
+                >
+                  <option value="">Modelo del agente</option>
+                  {modelsByProvider.map(([provider, list]) => (
+                    <optgroup key={provider} label={provider}>
+                      {list.map((item) => (
+                        <option key={`${provider}/${item.modelId}`} value={`${provider}/${item.modelId}`}>
+                          {item.name ?? item.modelId}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <Field
+              label="Primer prompt"
+              hint="Opcional. En una continuación, revisa el resumen antes de enviarlo."
+            >
+              <textarea
+                className="field min-h-32 resize-y text-xs leading-5"
+                value={newChat.prompt}
+                onChange={(event) => setNewChat({ ...newChat, prompt: event.target.value })}
+                placeholder="Escribe el primer mensaje o deja que la sesión espere..."
+              />
+            </Field>
+            <p className="text-[10px] text-faint">
+              Proyecto: <span className="font-mono">{directory ?? "location por defecto"}</span>
+            </p>
+            {createChat.isError ? (
+              <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+                {createChat.error instanceof Error ? createChat.error.message : String(createChat.error)}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }

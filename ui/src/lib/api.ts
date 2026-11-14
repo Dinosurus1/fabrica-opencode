@@ -42,8 +42,30 @@ export function unwrapList<T>(value: unknown): T[] {
 export const api = {
   projects: () => request<Project[] | { data: Project[] }>("/api/project").then((value) => unwrapList<Project>(value)),
 
-  sessions: (limit = 60) =>
-    request<{ data: Session[] }>(`/api/session?limit=${limit}`).then((value) => unwrapList<Session>(value)),
+  sessions: (limit = 60, options: { parentID?: string; directory?: string } = {}) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (options.parentID) params.set("parentID", options.parentID);
+    if (options.directory) params.set("directory", options.directory);
+    return request<{ data: Session[] }>(`/api/session?${params.toString()}`).then((value) =>
+      unwrapList<Session>(value),
+    );
+  },
+
+  createSession: (input: {
+    title?: string;
+    agent?: string;
+    model?: ModelRef;
+    directory?: string;
+  }) =>
+    request<{ data: Session }>("/api/session", {
+      method: "POST",
+      body: JSON.stringify({
+        ...(input.title ? { title: input.title } : {}),
+        ...(input.agent ? { agent: input.agent } : {}),
+        ...(input.model ? { model: input.model } : {}),
+        ...(input.directory ? { location: { directory: input.directory } } : {}),
+      }),
+    }).then((value) => value.data),
 
   session: (id: string) =>
     request<{ data: Session }>(`/api/session/${encodeURIComponent(id)}`).then((value) => value.data),

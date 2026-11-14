@@ -179,6 +179,8 @@ export const FactoryRpc = Rpc.define({
         properties: {
           entity_key: { type: "string" },
           scope: { type: "string", enum: ["global", "project"] },
+          project_id: { type: "string" },
+          project_path: { type: "string" },
           kind: { type: "string", enum: ["preference", "fact", "decision", "convention", "snippet"] },
           title: { type: "string" },
           sections: { type: "object", additionalProperties: { type: "string" } },

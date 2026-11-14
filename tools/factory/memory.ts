@@ -111,7 +111,7 @@ function asHistory(value: unknown): HistoryEntry[] {
 
 function renderSections(sections: SectionMap, history: HistoryEntry[]): string {
   const keys = [
-    ...PROJECT_SECTIONS.filter((key) => key !== "Historial de cambios" || history.length === 0),
+    ...PROJECT_SECTIONS.filter((key) => key !== "Historial de cambios"),
     ...Object.keys(sections).filter((key) => !PROJECT_SECTIONS.includes(key)),
   ];
   const parts: string[] = [];
@@ -119,10 +119,18 @@ function renderSections(sections: SectionMap, history: HistoryEntry[]): string {
     const value = sections[key];
     if (value && value.trim()) parts.push(`## ${key}\n${value.trim()}`);
   }
-  if (history.length > 0) {
-    const lines = history
-      .slice(-30)
-      .map((entry) => `- ${entry.date.slice(0, 10)} · ${entry.section}: ${entry.reason || "cambio"}`);
+  const historySection = (sections["Historial de cambios"] ?? "").trim();
+  if (historySection || history.length > 0) {
+    const lines: string[] = [];
+    if (historySection) lines.push(historySection);
+    if (history.length > 0) {
+      lines.push(
+        history
+          .slice(-30)
+          .map((entry) => `- ${entry.date.slice(0, 10)} · ${entry.section}: ${entry.reason || "cambio"}`)
+          .join("\n"),
+      );
+    }
     parts.push(`## Historial de cambios\n${lines.join("\n")}`);
   }
   return parts.join("\n\n");
@@ -220,6 +228,7 @@ interface UpsertInput {
   reason: string;
   lastVerifiedAt: string;
   sourceSession: string | null;
+  replaceSections?: boolean;
 }
 
 async function upsertMemory(
@@ -274,7 +283,7 @@ async function upsertMemory(
   const doc = asObject(existing.doc);
   const oldSections = asSections(doc.sections);
   const history = asHistory(doc.history);
-  const mergedSections: SectionMap = { ...oldSections };
+  const mergedSections: SectionMap = input.replaceSections ? {} : { ...oldSections };
   const additions: HistoryEntry[] = [];
   const now = new Date().toISOString();
   for (const [section, value] of Object.entries(input.sections)) {
@@ -407,6 +416,8 @@ export function createMemoryTools(deps: MemoryToolsDeps): ToolDef[] {
             pattern: "^(project|preference|decision|lesson):[a-z0-9][a-z0-9-]*$",
           },
           scope: { type: "string", enum: ["global", "project"] },
+          project_id: { type: "string", maxLength: 120 },
+          project_path: { type: "string", maxLength: 1024 },
           kind: {
             type: "string",
             enum: ["preference", "fact", "decision", "convention", "snippet"],
@@ -432,7 +443,17 @@ export function createMemoryTools(deps: MemoryToolsDeps): ToolDef[] {
             return fail("entity_key inválido. Usa project:<slug>, preference:<tema>, decision:<slug> o lesson:<slug>.");
           }
           const project = await deps.resolveProject(String(context.sessionID));
-          const target = scopeProject(entityKey, input.scope, project);
+          const target = scopeProject(entityKey, input.scope, {
+            projectId:
+              typeof input.project_id === "string" && input.project_id.trim()
+                ? input.project_id.trim()
+                : project.projectId,
+            directory:
+              typeof input.project_path === "string" && input.project_path.trim()
+                ? input.project_path.trim()
+                : project.directory,
+            name: project.name,
+          });
           const sections = asSections(input.sections);
           if (Object.keys(sections).length === 0 && typeof input.content === "string") {
             sections.Resumen = input.content.trim();
@@ -543,18 +564,31 @@ export function createMemoryTools(deps: MemoryToolsDeps): ToolDef[] {
             values,
           );
           const rows = result.rows;
+          const projectCounts = new Map<string, number>();
+          for (const row of rows) {
+            if (row.scope !== "project") continue;
+            projectCounts.set(row.project_id, (projectCounts.get(row.project_id) ?? 0) + 1);
+          }
 
           const clusters: MemoryRow[][] = [];
           for (const row of rows) {
             const rowTokens = tokensOf(`${row.title ?? ""} ${row.content}`);
             const target = clusters.find((cluster) => {
               const first = cluster[0]!;
-              if (first.scope !== row.scope || first.project_id !== row.project_id) return false;
-              if (row.scope === "project" && row.kind !== "decision") {
-                return first.kind !== "decision";
+              if (first.scope !== row.scope) return false;
+              const firstIsDecision = first.kind === "decision";
+              const rowIsDecision = row.kind === "decision";
+              if (first.scope === "project") {
+                if (firstIsDecision !== rowIsDecision) return false;
+                const firstPath = first.project_path ?? first.project_id;
+                const rowPath = row.project_path ?? row.project_id;
+                if (!rowIsDecision) return firstPath === rowPath;
               }
               if (first.entity_key && row.entity_key) return first.entity_key === row.entity_key;
-              if (first.kind === "decision" || row.kind === "decision") {
+              if (firstIsDecision || rowIsDecision) {
+                const firstSlug = slugify(first.title ?? first.content.slice(0, 60));
+                const rowSlug = slugify(row.title ?? row.content.slice(0, 60));
+                if (firstSlug && firstSlug === rowSlug) return true;
                 return jaccard(tokensOf(first.title ?? first.content), rowTokens) >= 0.7;
               }
               return jaccard(tokensOf(`${first.title ?? ""} ${first.content}`), rowTokens) >= 0.6;
@@ -564,7 +598,13 @@ export function createMemoryTools(deps: MemoryToolsDeps): ToolDef[] {
           }
 
           const plan = clusters.map((cluster) => {
-            const first = cluster[0]!;
+            const first = cluster.reduce((best, row) => {
+              if (row.scope !== "project") return best;
+              const diff = (projectCounts.get(row.project_id) ?? 0) - (projectCounts.get(best.project_id) ?? 0);
+              if (diff > 0) return row;
+              if (diff === 0 && new Date(iso(row.updated_at)) > new Date(iso(best.updated_at))) return row;
+              return best;
+            }, cluster[0]!);
             const entityKeys = [...new Set(cluster.map((row) => row.entity_key).filter(Boolean))] as string[];
             const titleSlug = slugify(first.title ?? first.content.slice(0, 60) ?? "memoria");
             const projectSlug = slugify(
@@ -610,6 +650,14 @@ export function createMemoryTools(deps: MemoryToolsDeps): ToolDef[] {
               const effectiveSections =
                 Object.keys(rowSections).length > 0 ? rowSections : { [fallbackKey]: row.content };
               for (const [section, value] of Object.entries(effectiveSections)) {
+                if (section === "Historial de cambios") {
+                  for (const line of value.split("\n")) {
+                    const clean = line.trim();
+                    if (clean) historyLines.add(clean);
+                  }
+                  continue;
+                }
+                if (section === "Fuentes") continue;
                 const old = sections[section];
                 if (old && old.trim() !== value.trim()) {
                   const oldDate = sectionDates.get(section) ?? "";
@@ -741,13 +789,34 @@ export function createMemoryTools(deps: MemoryToolsDeps): ToolDef[] {
                 )
               ).rows;
               if (sources.length === 0) continue;
-              const first = sources[0]!;
               const scopes = new Set(sources.map((row) => row.scope));
               if (scopes.size > 1) {
                 errors.push(`Cluster ${String(cluster.entity_key)} mezcla scopes; se deja separado.`);
                 kept += 1;
                 continue;
               }
+              const paths = new Set(
+                sources
+                  .filter((row) => row.scope === "project")
+                  .map((row) => row.project_path ?? row.project_id),
+              );
+              if (paths.size > 1) {
+                errors.push(`Cluster ${String(cluster.entity_key)} mezcla proyectos; se deja separado.`);
+                kept += 1;
+                continue;
+              }
+              const projectCounts = new Map<string, number>();
+              for (const source of sources) {
+                if (source.scope !== "project") continue;
+                projectCounts.set(source.project_id, (projectCounts.get(source.project_id) ?? 0) + 1);
+              }
+              const first = sources.reduce((best, row) => {
+                if (row.scope !== "project") return best;
+                const diff = (projectCounts.get(row.project_id) ?? 0) - (projectCounts.get(best.project_id) ?? 0);
+                if (diff > 0) return row;
+                if (diff === 0 && new Date(iso(row.updated_at)) > new Date(iso(best.updated_at))) return row;
+                return best;
+              }, sources[0]!);
               const entityKey = String(cluster.entity_key ?? first.entity_key ?? "");
               if (!ENTITY_RE.test(entityKey)) {
                 errors.push(`entity_key inválido en cluster: ${entityKey}`);
@@ -762,7 +831,9 @@ export function createMemoryTools(deps: MemoryToolsDeps): ToolDef[] {
                 projectId: first.project_id,
                 projectPath: first.project_path,
                 kind: first.kind,
-                title: first.title,
+                title: entityKey.startsWith("project:")
+                  ? basename(first.project_path ?? entityKey.slice("project:".length))
+                  : first.title,
                 sections,
                 tags,
                 importance: Math.max(...sources.map((row) => row.importance ?? 3)),
@@ -771,6 +842,7 @@ export function createMemoryTools(deps: MemoryToolsDeps): ToolDef[] {
                 reason: "consolidación de memorias",
                 lastVerifiedAt: new Date().toISOString(),
                 sourceSession: String(context.sessionID),
+                replaceSections: entityKey.startsWith("project:"),
               });
               if (result.action === "conflict" || !result.id) {
                 errors.push(`Conflicto al consolidar ${entityKey}.`);

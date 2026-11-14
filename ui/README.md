@@ -60,7 +60,7 @@ No publiques la consola en `0.0.0.0` sin poner delante autenticación y TLS.
 | Ruta | Qué muestra |
 |---|---|
 | `/` | Estado general, sesiones, steps, coste, uso por modelo y actividad reciente. |
-| `/sessions` | Todas las sesiones de OpenCode (hasta 500); abrir, cambiar agente/modelo, prompt e interrumpir. |
+| `/sessions` | Sesiones raíz relevantes (sin subagentes ni temporales por defecto); crear chats, abrir, cambiar agente/modelo, prompt, interrumpir y aviso de sesión larga con traspaso a una sesión nueva. |
 | `/work` | Tareas, planes, gates, revisiones, presupuesto global y execution log. |
 | `/agents` | Selección de agentes por proyecto, modo manual/híbrido/auto y modelo activo. |
 | `/models` | Catálogo real, perfiles, política y asignación de modelo/presupuesto por rol. |
@@ -132,6 +132,12 @@ Factory Console (React/Vite)
   `memory-consolidator` puede revisarla, pero la UI no aplica nada sin backup y
   confirmación. Los clusters con conflictos o confianza baja exigen una casilla
   de aprobación explícita.
+- La lista de Sessions oculta por defecto subagentes, sesiones sin agente/título y
+  directorios temporales (`/tmp` o worktrees). El selector «Subagentes» permite
+  verlos para auditoría.
+- El aviso de sesión larga usa los tokens acumulados (≥2M) o el contexto del
+  último mensaje (≥60 % del límite del modelo). El traspaso es un resumen local
+  editable; no se envía nada hasta que el usuario crea la sesión.
 - Configuración, permisos y proveedores son de solo lectura en esta etapa.
 - El bundle inicial supera los 500 KB por Recharts; se puede dividir por rutas
   cuando haga falta.

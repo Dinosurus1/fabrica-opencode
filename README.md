@@ -252,7 +252,9 @@ Módulos: Overview, Sessions, Work, Agents, Models, Memory, Projects, Skills,
 Analytics y Settings. La UI envía `location[directory]` del proyecto
 seleccionado para que los modelos y permisos se apliquen a la location correcta.
 
-En esta etapa la UI puede crear/aplicar perfiles de modelo, editar la política
+En esta etapa la UI puede crear chats nuevos, filtrar sesiones raíz relevantes y
+avisar cuando una sesión es muy larga con un traspaso editable a una sesión
+nueva. También puede crear/aplicar perfiles de modelo, editar la política
 (permitidos, prohibidos, contexto mínimo, tools), fijar presupuestos, seleccionar
 agentes y aplicarlos a la sesión, cambiar el agente/modelo de una sesión, enviar
 prompts, interrumpir, ver el execution log y gestionar memoria. La pestaña Memory
