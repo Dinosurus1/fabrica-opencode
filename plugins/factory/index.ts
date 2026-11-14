@@ -174,10 +174,16 @@ export default Plugin.define({
         const slash = ref.indexOf("/");
         const providerID = slash >= 0 ? ref.slice(0, slash) : "";
         const modelID = slash >= 0 ? ref.slice(slash + 1) : ref;
-        const found = models.find((item) => {
-          const sameProvider = providerID === "" || String(item.providerID ?? "") === providerID;
-          return sameProvider && (String(item.modelID ?? "") === modelID || String(item.id ?? "") === modelID);
-        });
+        const matches = (candidate: Record<string, unknown>, id: string) => {
+          const sameProvider = providerID === "" || String(candidate.providerID ?? "") === providerID;
+          return sameProvider && (String(candidate.modelID ?? "") === id || String(candidate.id ?? "") === id);
+        };
+        const normalizedModelID = modelID.replace(/-\d{4}$/, "");
+        const found =
+          models.find((item) => matches(item, modelID)) ??
+          (normalizedModelID !== modelID
+            ? models.find((item) => matches(item, normalizedModelID))
+            : undefined);
         if (!found) return null;
         const costs = Array.isArray(found.cost) ? (found.cost as Array<Record<string, unknown>>) : [];
         if (costs.length === 0) return null;

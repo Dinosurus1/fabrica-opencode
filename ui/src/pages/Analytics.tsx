@@ -85,8 +85,9 @@ export function AnalyticsPage() {
       cost: number;
     }>();
     for (const row of stats.data?.models ?? []) {
+      const modelId = row.model.id.replace(/-\d{4}$/, "");
       const key = `${row.model.providerID}/${row.model.id}`;
-      const price = prices.get(key);
+      const price = prices.get(key) ?? prices.get(`${row.model.providerID}/${modelId}`);
       const tokens = row.tokens;
       const estimated =
         row.cost > 0
@@ -98,7 +99,6 @@ export function AnalyticsPage() {
                 (tokens.cache?.write ?? 0) * (price.costCacheWrite ?? 0)) /
               1_000_000
             : 0;
-      const modelId = row.model.id;
       const bucket = grouped.get(modelId) ?? {
         model: modelId,
         providers: new Set<string>(),

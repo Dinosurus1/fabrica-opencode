@@ -1271,7 +1271,25 @@ export class MamStore {
        WHERE version = $1 AND provider_id = $2 AND model_id = $3`,
       [resolvedVersion, providerId, modelId],
     );
-    const row = result.rows[0];
+    let row = result.rows[0];
+    if (!row) {
+      // Alias de versión: deepseek-v4.1-flash-1017 -> deepseek-v4.1-flash.
+      const normalized = modelId.replace(/-\d{4}$/, "");
+      if (normalized !== modelId) {
+        const fallback = await this.query<{
+          input: string | number | null;
+          output: string | number | null;
+          cache_read: string | number | null;
+          cache_write: string | number | null;
+        }>(
+          `SELECT input, output, cache_read, cache_write
+           FROM factory_model_prices
+           WHERE version = $1 AND provider_id = $2 AND model_id = $3`,
+          [resolvedVersion, providerId, normalized],
+        );
+        row = fallback.rows[0];
+      }
+    }
     if (!row) return null;
     return {
       input: numberOrNull(row.input),

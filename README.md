@@ -338,7 +338,9 @@ tokens ponderados, coste, estado, intento, error, versiones, precio versionado y
 referencia al gate. Alimenta `executions_list`, `model_history` y Analytics.
 Analytics separa el coste de fábrica (execution log) del coste estimado de todas
 las sesiones de OpenCode; este último se calcula con la tabla de precios
-versionada y puede diferir del panel de facturación del proveedor.
+versionada y puede diferir del panel de facturación del proveedor. Las variantes
+con sufijo de versión de 4 dígitos (por ejemplo `-1017`) se agrupan por el ID
+base para atribuir todo el uso al mismo modelo.
 
 RPC para la consola web: `/api/rpc/opencode.factory/*` (`models.*`, `agents.list`,
 `profiles.*`, `work.*`, `memory.*`, `analytics.summary`, `health`).
