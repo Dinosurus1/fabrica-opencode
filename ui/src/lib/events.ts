@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 export interface LiveEvent {
   id?: string | null;
   type: string;
+  created?: number;
   data: Record<string, unknown>;
   durable?: { aggregateID?: string; seq?: number };
 }

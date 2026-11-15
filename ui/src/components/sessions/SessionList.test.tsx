@@ -55,6 +55,12 @@ describe("SessionList", () => {
     expect(screen.getByText(/Trabajando/)).toBeInTheDocument();
   });
 
+  it("marca las sesiones que esperan aprobación", () => {
+    renderList({ attentionIds: new Set(["ses_1"]) });
+    expect(screen.getByLabelText("Pide permiso")).toBeInTheDocument();
+    expect(screen.getByText(/pide permiso/)).toBeInTheDocument();
+  });
+
   it("usa un estado vacío claro", () => {
     renderList({ sessions: [] });
     expect(screen.getByText(/Sin conversaciones/)).toBeInTheDocument();

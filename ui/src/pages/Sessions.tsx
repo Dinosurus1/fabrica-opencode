@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import type { PendingAttachment } from "../components/sessions/attachments";
 import {
   AttachmentButton,
@@ -21,6 +22,7 @@ import {
   useFileAttachments,
 } from "../components/sessions/attachments";
 import { SessionList } from "../components/sessions/SessionList";
+import { PermissionsPanel } from "../components/sessions/Permissions";
 import { messageText, Transcript } from "../components/sessions/Transcript";
 import { useProject } from "../components/ProjectContext";
 import { Button, ConfirmDialog, Field, Modal } from "../components/ui";
@@ -28,13 +30,37 @@ import { api } from "../lib/api";
 import { deleteAttachments, pruneAttachments, readAttachments, writeAttachments } from "../lib/attachmentStore";
 import { useSessionEvents, runningSessionIds } from "../lib/events";
 import { cn, formatCompact, formatUsd, relativeTime, shortPath } from "../lib/format";
+import {
+  applyPermissionEvent,
+  replaceSessionPermissions,
+  seedPermissions,
+  sessionIdFromEvent,
+} from "../lib/permissions";
 import { rpc } from "../lib/rpc";
-import type { CatalogModel, Profile, PromptFileAttachment, Session, SessionMessage } from "../lib/types";
+import {
+  applyStreamEvent,
+  clearSessionStreams,
+  clearSettledStreams,
+  mergeStreamMessages,
+  type StreamState,
+} from "../lib/streaming";
+import type {
+  CatalogModel,
+  PermissionDecision,
+  PermissionRequest,
+  Profile,
+  ProfileRecommendation,
+  PromptFileAttachment,
+  Session,
+  SessionMessage,
+} from "../lib/types";
 
 interface NewChatDraft {
+  mode: "new" | "continuation";
   title: string;
   agent: string;
   model: string;
+  profileId: string;
   prompt: string;
 }
 
@@ -178,6 +204,7 @@ export function SessionsPage() {
   const { projectId, project } = useProject();
   const directory = project?.canonical;
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [selectedId, setSelectedId] = useState<string | null>(() => readStored(SELECTED_SESSION_KEY));
   const [query, setQuery] = useState("");
@@ -191,6 +218,8 @@ export function SessionsPage() {
   const [newChat, setNewChat] = useState<NewChatDraft | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pendingSessions, setPendingSessions] = useState<Set<string>>(() => new Set());
+  const [permissionEvents, setPermissionEvents] = useState<Record<string, string[]>>({});
+  const [streamState, setStreamState] = useState<StreamState>({});
   const [optimistic, setOptimistic] = useState<OptimisticMessage | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -245,6 +274,15 @@ export function SessionsPage() {
       ),
   });
 
+  // Recomendación del proyecto: se usa para preseleccionar el perfil en el
+  // diálogo de nueva sesión/continuación, sin aplicarlo por sorpresa.
+  const profileSuggestion = useQuery({
+    queryKey: ["factory", "profile-recommend", directory ?? "default"],
+    queryFn: () => rpc<ProfileRecommendation>("profiles.recommend", {}, directory),
+    enabled: Boolean(directory) && Boolean(newChat),
+    staleTime: 60_000,
+  });
+
   const selected = sessions.data?.find((session) => session.id === selectedId) ?? null;
   const runningIds = useMemo(
     () => runningSessionIds(active.data, sessions.data ?? []),
@@ -288,6 +326,38 @@ export function SessionsPage() {
     staleTime: 0,
   });
 
+  const permissions = useQuery({
+    queryKey: ["opencode", "session-permissions", selectedId],
+    queryFn: () => api.sessionPermissions(selectedId!),
+    enabled: Boolean(selectedId),
+    refetchInterval: 10_000,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+  });
+
+  // Vista por location: alimenta el aviso global del Layout y las marcas de la
+  // lista para sesiones que no están abiertas.
+  const projectPermissions = useQuery({
+    queryKey: ["opencode", "permission-requests", directory ?? "default"],
+    queryFn: () => api.permissionRequests(directory),
+    enabled: Boolean(directory),
+    refetchInterval: 20_000,
+    refetchOnWindowFocus: true,
+    staleTime: 5_000,
+  });
+
+  const pendingPermissions = useMemo(
+    () => permissions.data ?? [],
+    [permissions.data],
+  );
+  const waitingPermission = pendingPermissions.length > 0;
+
+  const attentionIds = useMemo(() => {
+    let state = seedPermissions(permissionEvents, projectPermissions.data);
+    if (selectedId) state = replaceSessionPermissions(state, selectedId, permissions.data);
+    return new Set(Object.keys(state));
+  }, [permissionEvents, projectPermissions.data, permissions.data, selectedId]);
+
   const invalidateSessions = (delay = 400) => {
     if (listTimer.current) clearTimeout(listTimer.current);
     listTimer.current = setTimeout(() => {
@@ -307,7 +377,47 @@ export function SessionsPage() {
   const live = useSessionEvents((event) => {
     const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : undefined;
     const streaming = STREAM_EVENTS.has(event.type);
+    const textStream = /^session\.(text|reasoning)\./.test(event.type);
+
+    // El streaming de texto se acumula en local: no hace falta pedir el
+    // contexto completo en cada delta. El contexto se refresca al terminar el
+    // bloque y al llegar a un estado terminal.
+    if (textStream) {
+      setStreamState((current) => applyStreamEvent(current, event));
+      if (sessionID) {
+        markPending(sessionID);
+        if (event.type.endsWith(".ended") && sessionID === selectedRef.current) {
+          invalidateContext(600);
+        }
+      }
+      return;
+    }
+
     if (event.type.startsWith("session.") && !streaming) invalidateSessions(600);
+
+    if (event.type === "permission.asked" || event.type === "permission.replied") {
+      setPermissionEvents((current) => applyPermissionEvent(current, event));
+      const target = sessionIdFromEvent(event);
+      if (target) {
+        void queryClient.invalidateQueries({
+          queryKey: ["opencode", "session-permissions", target],
+        });
+        if (target === selectedRef.current) invalidateContext(1_200);
+      }
+      void queryClient.invalidateQueries({ queryKey: ["opencode", "permission-requests"] });
+      return;
+    }
+
+    if (event.type === "session.status" && sessionID) {
+      const status = (event.data?.status as { type?: string } | undefined)?.type;
+      if (status === "busy" || status === "retry") {
+        markPending(sessionID);
+      } else if (status === "idle") {
+        clearPending(sessionID);
+        if (sessionID === selectedRef.current) invalidateContext(0);
+      }
+      return;
+    }
 
     // El estado de "trabajando" se resuelve por sesión, aunque el evento sea
     // de otra conversación distinta a la abierta.
@@ -357,6 +467,16 @@ export function SessionsPage() {
     if (applied) setProfileId(applied);
   }, [profiles.data?.applied_profile_id]);
 
+  // Si el diálogo se abrió antes de que llegara la recomendación, la aplica
+  // como preselección. Nunca pisa una elección explícita del usuario.
+  useEffect(() => {
+    const suggested = profileSuggestion.data?.profile?.id;
+    if (!suggested) return;
+    setNewChat((current) =>
+      current && !current.profileId ? { ...current, profileId: suggested } : current,
+    );
+  }, [profileSuggestion.data?.profile?.id]);
+
   // Cada conversación conserva su borrador y sus adjuntos pendientes. El texto
   // se guarda en localStorage; los adjuntos en IndexedDB.
   useEffect(() => {
@@ -390,6 +510,66 @@ export function SessionsPage() {
   useEffect(() => {
     storeValue(SELECTED_SESSION_KEY, selectedId);
   }, [selectedId]);
+
+  // Sincronización entre pestañas: la sesión abierta y los borradores viajan
+  // por localStorage. La pestaña que recibe no reescribe la clave, así que no
+  // se producen bucles de eventos.
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (!event.key) return;
+      if (event.key === SELECTED_SESSION_KEY) {
+        if (event.newValue && event.newValue !== selectedRef.current) {
+          setSelectedId(event.newValue);
+          setListOpen(false);
+        }
+        return;
+      }
+      if (!event.key.startsWith(DRAFT_PREFIX)) return;
+      const sessionId = event.key.slice(DRAFT_PREFIX.length);
+      if (sessionId !== selectedRef.current) return;
+      // No pisotear lo que el usuario está escribiendo en esta pestaña.
+      if (document.activeElement === textareaRef.current) return;
+      setPrompt(event.newValue ?? "");
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  // Al volver de segundo plano o recuperar la red, resincroniza el estado que
+  // el SSE pudo perder mientras la pestaña estaba suspendida.
+  useEffect(() => {
+    const resync = () => {
+      if (document.visibilityState !== "visible") return;
+      void sessions.refetch();
+      void active.refetch();
+      if (selectedRef.current) void context.refetch();
+      void queryClient.invalidateQueries({ queryKey: ["opencode", "permission-requests"] });
+    };
+    document.addEventListener("visibilitychange", resync);
+    window.addEventListener("online", resync);
+    return () => {
+      document.removeEventListener("visibilitychange", resync);
+      window.removeEventListener("online", resync);
+    };
+  }, [sessions.refetch, active.refetch, context.refetch, queryClient]);
+
+  // Cuando la ejecución termina y el contexto ya trae el mensaje final, el
+  // buffer de deltas deja de ser necesario.
+  useEffect(() => {
+    if (!selectedId || running || !context.data) return;
+    setStreamState((current) => clearSettledStreams(current, selectedId, context.data!));
+  }, [selectedId, running, context.data]);
+
+  // El aviso global enlaza a /sessions?session=<id>; se consume una sola vez.
+  useEffect(() => {
+    const requested = searchParams.get("session");
+    if (!requested) return;
+    setSelectedId(requested);
+    setListOpen(false);
+    const next = new URLSearchParams(searchParams);
+    next.delete("session");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     storeValue(ONLY_PROJECT_KEY, onlyProject ? "1" : null);
@@ -558,6 +738,7 @@ export function SessionsPage() {
         (current ?? []).filter((session) => session.id !== id),
       );
       queryClient.removeQueries({ queryKey: ["opencode", "session-context", id] });
+      setStreamState((current) => clearSessionStreams(current, id));
       writeDraft(id, "");
       attachmentDrafts.current.delete(id);
       void deleteAttachments(id);
@@ -586,10 +767,41 @@ export function SessionsPage() {
     onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
   });
 
+  const replyPermission = useMutation({
+    mutationFn: ({
+      request,
+      decision,
+      message,
+    }: {
+      request: PermissionRequest;
+      decision: PermissionDecision;
+      message?: string;
+    }) => api.replyPermission(request.sessionID, request.id, decision, message),
+    onSuccess: (_result, { request }) => {
+      setPermissionEvents((current) =>
+        applyPermissionEvent(current, {
+          type: "permission.replied",
+          data: { sessionID: request.sessionID, requestID: request.id },
+        }),
+      );
+      void queryClient.invalidateQueries({
+        queryKey: ["opencode", "session-permissions", request.sessionID],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["opencode", "permission-requests"] });
+      invalidateContext(200);
+      invalidateSessions(0);
+    },
+    onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
+  });
+
   const refresh = () => {
     void sessions.refetch();
     void active.refetch();
-    if (selectedId) void queryClient.invalidateQueries({ queryKey: ["opencode", "session-context", selectedId] });
+    if (selectedId) {
+      void queryClient.invalidateQueries({ queryKey: ["opencode", "session-context", selectedId] });
+      void queryClient.invalidateQueries({ queryKey: ["opencode", "session-permissions", selectedId] });
+    }
+    void queryClient.invalidateQueries({ queryKey: ["opencode", "permission-requests"] });
   };
 
   const createChat = useMutation({
@@ -604,6 +816,25 @@ export function SessionsPage() {
             : undefined,
         directory,
       });
+      let profileWarning: string | null = null;
+      if (draft.profileId) {
+        try {
+          const applied = await rpc<{ applied: boolean; warnings?: string[]; session_updated?: boolean }>(
+            "profiles.apply",
+            { id: draft.profileId, confirmed: true, session_id: created.id },
+            directory,
+          );
+          if (!applied.applied) {
+            profileWarning = "El perfil no se aplicó: revisa su validación en Models.";
+          } else if (applied.warnings?.length) {
+            profileWarning = `Perfil aplicado con avisos: ${applied.warnings.join(" ")}`;
+          }
+        } catch (error) {
+          profileWarning = `La sesión se creó, pero el perfil falló: ${
+            error instanceof Error ? error.message : String(error)
+          }`;
+        }
+      }
       let promptError: string | null = null;
       if (draft.prompt.trim() || draft.files.length > 0) {
         try {
@@ -612,20 +843,32 @@ export function SessionsPage() {
           promptError = error instanceof Error ? error.message : String(error);
         }
       }
-      return { created, promptError, prompted: Boolean(draft.prompt.trim() || draft.files.length) };
+      return {
+        created,
+        promptError,
+        profileWarning,
+        prompted: Boolean(draft.prompt.trim() || draft.files.length),
+      };
     },
-    onSuccess: async ({ created, promptError, prompted }) => {
+    onSuccess: async ({ created, promptError, profileWarning, prompted }) => {
       setNewChat(null);
       draftAttachments.clear();
       setSelectedId(created.id);
       setListOpen(false);
       if (prompted && !promptError) markPending(created.id);
-      setNotice(promptError ? `Sesión creada, pero el primer prompt falló: ${promptError}` : null);
+      const warnings = [profileWarning, promptError ? `el primer prompt falló: ${promptError}` : null].filter(
+        Boolean,
+      );
+      setNotice(warnings.length ? `Sesión creada. ${warnings.join(" · ")}` : null);
       queryClient.setQueryData(["opencode", "sessions"], (current: Session[] | undefined) => [
         created,
         ...(current ?? []).filter((session) => session.id !== created.id),
       ]);
-      await queryClient.invalidateQueries({ queryKey: ["opencode", "sessions"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["opencode", "sessions"] }),
+        queryClient.invalidateQueries({ queryKey: ["factory", "profiles"] }),
+        queryClient.invalidateQueries({ queryKey: ["factory", "profile"] }),
+      ]);
     },
     onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
   });
@@ -665,21 +908,24 @@ export function SessionsPage() {
   );
 
   const transcript = useMemo(() => {
-    const messages = context.data ?? [];
-    if (!optimistic || optimistic.sessionId !== selectedId) return messages;
-    const alreadyThere = messages.some(
-      (message) => message.type === "user" && messageText(message) === optimistic.text,
-    );
-    if (alreadyThere) return messages;
-    const pending: SessionMessage = {
-      id: `pending-${optimistic.createdAt}`,
-      type: "user",
-      text: optimistic.text,
-      files: optimistic.files,
-      time: { created: optimistic.createdAt },
-    };
-    return [...messages, pending];
-  }, [context.data, optimistic, selectedId]);
+    let messages = context.data ?? [];
+    if (optimistic && optimistic.sessionId === selectedId) {
+      const alreadyThere = messages.some(
+        (message) => message.type === "user" && messageText(message) === optimistic.text,
+      );
+      if (!alreadyThere) {
+        const pending: SessionMessage = {
+          id: `pending-${optimistic.createdAt}`,
+          type: "user",
+          text: optimistic.text,
+          files: optimistic.files,
+          time: { created: optimistic.createdAt },
+        };
+        messages = [...messages, pending];
+      }
+    }
+    return mergeStreamMessages(messages, streamState, selectedId);
+  }, [context.data, optimistic, selectedId, streamState]);
 
   const defaultChatAgent = (session: Session | null) =>
     chatAgents.find((item) => item.id === session?.agent)?.id ?? chatAgents[0]?.id ?? "factory";
@@ -688,9 +934,11 @@ export function SessionsPage() {
     setNotice(null);
     draftAttachments.clear();
     setNewChat({
+      mode: "new",
       title: "",
       agent: defaultChatAgent(selected),
       model: selected?.model ? `${selected.model.providerID}/${selected.model.id}` : "",
+      profileId: profiles.data?.applied_profile_id ?? "",
       prompt: "",
     });
   };
@@ -700,9 +948,11 @@ export function SessionsPage() {
     setNotice(null);
     draftAttachments.clear();
     setNewChat({
+      mode: "continuation",
       title: truncate(`Continuación · ${selected.title ?? selected.id}`, 90),
       agent: defaultChatAgent(selected),
       model: selected.model ? `${selected.model.providerID}/${selected.model.id}` : "",
+      profileId: profiles.data?.applied_profile_id ?? "",
       prompt: buildHandoffPrompt(selected, context.data ?? []),
     });
   };
@@ -756,6 +1006,7 @@ export function SessionsPage() {
         <SessionList
           sessions={filtered}
           runningIds={visibleRunning}
+          attentionIds={attentionIds}
           selectedId={selectedId}
           loading={sessions.isLoading}
           liveLabel={liveLabel}
@@ -818,20 +1069,32 @@ export function SessionsPage() {
                   <span
                     className={cn(
                       "ml-1 inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium",
-                      liveTone === "live"
-                        ? "border-success/25 bg-success/10 text-success"
-                        : liveTone === "connecting"
-                          ? "border-warning/25 bg-warning/10 text-warning"
-                          : "border-danger/25 bg-danger/10 text-danger",
+                      waitingPermission
+                        ? "border-warning/40 bg-warning/10 text-warning"
+                        : liveTone === "live"
+                          ? "border-success/25 bg-success/10 text-success"
+                          : liveTone === "connecting"
+                            ? "border-warning/25 bg-warning/10 text-warning"
+                            : "border-danger/25 bg-danger/10 text-danger",
                     )}
                   >
                     <span
                       className={cn(
                         "size-1.5 rounded-full",
-                        liveTone === "live" ? "bg-success" : liveTone === "connecting" ? "bg-warning" : "bg-danger",
+                        waitingPermission
+                          ? "animate-pulse bg-warning"
+                          : liveTone === "live"
+                            ? "bg-success"
+                            : liveTone === "connecting"
+                              ? "bg-warning"
+                              : "bg-danger",
                       )}
                     />
-                    {running ? "Trabajando" : liveLabel}
+                    {waitingPermission
+                      ? `Esperando aprobación${pendingPermissions.length > 1 ? ` (${pendingPermissions.length})` : ""}`
+                      : running
+                        ? "Trabajando"
+                        : liveLabel}
                   </span>
                 </div>
                 <div className="mt-1 hidden flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-faint sm:flex">
@@ -1021,6 +1284,22 @@ export function SessionsPage() {
               </div>
             ) : null}
 
+            <PermissionsPanel
+              requests={pendingPermissions}
+              pending={
+                replyPermission.isPending && replyPermission.variables
+                  ? {
+                      requestId: replyPermission.variables.request.id,
+                      decision: replyPermission.variables.decision,
+                    }
+                  : null
+              }
+              error={replyPermission.error}
+              onReply={(request, decision, message) =>
+                replyPermission.mutate({ request, decision, message })
+              }
+            />
+
             <Transcript
               messages={transcript}
               running={running}
@@ -1078,9 +1357,11 @@ export function SessionsPage() {
                     placeholder={
                       dragging
                         ? "Suelta los archivos para adjuntarlos…"
-                        : running
-                          ? "El agente está trabajando. Tu mensaje se encolará…"
-                          : "Escribe un mensaje… (Enter para enviar, Shift+Enter para salto de línea)"
+                        : waitingPermission
+                          ? "El agente espera tu aprobación arriba…"
+                          : running
+                            ? "El agente está trabajando. Tu mensaje se encolará…"
+                            : "Escribe un mensaje… (Enter para enviar, Shift+Enter para salto de línea)"
                     }
                     className="max-h-[220px] min-h-[26px] w-full resize-none bg-transparent text-[13px] leading-6 text-ink outline-none placeholder:text-faint"
                   />
@@ -1127,7 +1408,7 @@ export function SessionsPage() {
 
       <Modal
         open={Boolean(newChat)}
-        title={newChat?.prompt.startsWith("Continuación de la sesión") ? "Continuar en nueva sesión" : "Nuevo chat"}
+        title={newChat?.mode === "continuation" ? "Continuar en nueva sesión" : "Nuevo chat"}
         description="Una sesión limpia evita arrastrar historial y tokens. Si vienes de una sesión larga, el resumen de traspaso es editable."
         onClose={() => setNewChat(null)}
         width="max-w-2xl"
@@ -1189,6 +1470,31 @@ export function SessionsPage() {
                 </select>
               </Field>
             </div>
+            <Field
+              label="Perfil de modelos"
+              hint={
+                profileSuggestion.data?.profile
+                  ? `Recomendado para este proyecto: ${profileSuggestion.data.profile.name} (${Math.round(
+                      profileSuggestion.data.confidence * 100,
+                    )} % confianza). Puedes cambiarlo.`
+                  : "Se aplica a los agentes y al modelo de la sesión. Puedes cambiarlo antes de crear."
+              }
+            >
+              <select
+                className="field"
+                value={newChat.profileId}
+                onChange={(event) => setNewChat({ ...newChat, profileId: event.target.value })}
+              >
+                <option value="">Sin perfil (modelo del agente)</option>
+                {(profiles.data?.profiles ?? []).map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                    {item.id === profileSuggestion.data?.profile?.id ? " · recomendado" : ""}
+                    {item.id === profiles.data?.applied_profile_id ? " · aplicado" : ""}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <AttachmentChips
               files={draftAttachments.files}
               onRemove={draftAttachments.remove}

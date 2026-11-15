@@ -82,7 +82,7 @@ iniciar la sesión gráfica.
 | Ruta | Qué muestra |
 |---|---|
 | `/` | Estado general, sesiones, steps, coste, uso por modelo y actividad reciente. |
-| `/sessions` | Sesiones raíz relevantes (sin subagentes ni temporales por defecto) con lista agrupada y búsqueda. Crear, abrir, eliminar (con confirmación), cambiar agente/modelo/perfil, enviar prompts con adjuntos (imágenes, PDFs y documentos), interrumpir, seguir la conversación en tiempo real por SSE y aviso de sesión larga con traspaso a una sesión nueva. Conserva el borrador y los adjuntos pendientes de cada conversación, y restaura la última sesión y los filtros al recargar. |
+| `/sessions` | Sesiones raíz relevantes (sin subagentes ni temporales por defecto) con lista agrupada y búsqueda. Crear, abrir, eliminar (con confirmación), cambiar agente/modelo/perfil, enviar prompts con adjuntos (imágenes, PDFs y documentos), interrumpir, seguir la conversación en tiempo real por SSE y aviso de sesión larga con traspaso a una sesión nueva. Aprueba o rechaza las solicitudes de permiso de herramientas (shell, archivos, web…) que OpenCode deja en pausa, con marca en la lista y aviso global. Conserva el borrador y los adjuntos pendientes de cada conversación, y restaura la última sesión y los filtros al recargar. |
 | `/work` | Tareas, planes, gates, revisiones, presupuesto global y execution log. |
 | `/agents` | Selección de agentes por proyecto, modo manual/híbrido/auto y modelo activo. |
 | `/models` | Catálogo real, perfiles (incluidos los predeterminados), recomendación de perfil por proyecto, política y asignación de modelo/presupuesto por rol. |
@@ -135,6 +135,17 @@ Factory Console (React/Vite)
 - La vista de sesiones se suscribe a `/api/event` (SSE) para reflejar mensajes,
   herramientas y estado en tiempo real. Si el filtro de tipos deja de ser válido
   tras actualizar OpenCode, reintenta automáticamente sin filtro.
+- El texto y el razonamiento se pintan con los deltas
+  (`session.text.delta`, `session.reasoning.delta`) y se fusionan por
+  `assistantMessageID`/`ordinal` (`lib/streaming.ts`). El contexto completo solo
+  se pide al cerrar el bloque, al terminar la ejecución o al reconciliar.
+- La sesión abierta y los borradores se sincronizan entre pestañas por
+  `localStorage`; al volver del segundo plano se refrescan sesiones, contexto y
+  permisos.
+- Los permisos llegan por `permission.asked` y se responden con
+  `POST /api/session/:id/permission/:requestId/reply` (`once`, `always`,
+  `reject` + motivo opcional). Mientras no se responde, OpenCode mantiene la
+  herramienta en pausa y la sesión figura como «running».
 - Los adjuntos se envían como data URI en `files[].uri`; OpenCode los convierte
   en adjuntos inline. El límite de la consola es 6 archivos de 8 MB (20 MB en
   total) por mensaje.
@@ -170,7 +181,10 @@ Factory Console (React/Vite)
 - El aviso de sesión larga usa los tokens acumulados (≥2M) o el contexto del
   último mensaje (≥60 % del límite del modelo). El traspaso es un resumen local
   editable; no se envía nada hasta que el usuario crea la sesión.
-- Configuración, permisos y proveedores son de solo lectura en esta etapa.
+- Los permisos de herramientas se responden en caliente (`una vez`, `siempre` o
+  `rechazar`). La política de permisos de cada agente sigue siendo de solo
+  lectura en esta etapa.
+- Configuración y proveedores son de solo lectura en esta etapa.
 - El bundle inicial supera los 500 KB por Recharts; se puede dividir por rutas
   cuando haga falta.
 - La UI no edita archivos de configuración ni hace push/deploy.

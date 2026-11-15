@@ -6,6 +6,7 @@ import {
   Loader2,
   MessageSquarePlus,
   Search,
+  ShieldAlert,
   Trash2,
   X,
 } from "lucide-react";
@@ -16,6 +17,7 @@ import type { Session } from "../../lib/types";
 interface SessionListProps {
   sessions: Session[];
   runningIds: Set<string>;
+  attentionIds?: Set<string>;
   selectedId: string | null;
   loading: boolean;
   liveLabel: string;
@@ -74,6 +76,7 @@ function OutcomeIcon({ outcome }: { outcome?: string }) {
 export function SessionList({
   sessions,
   runningIds,
+  attentionIds,
   selectedId,
   loading,
   liveLabel,
@@ -112,6 +115,11 @@ export function SessionList({
         ? "bg-warning"
         : "bg-danger";
 
+  const attentionCount = useMemo(
+    () => sessions.filter((session) => attentionIds?.has(session.id)).length,
+    [sessions, attentionIds],
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-line-soft px-3 pb-3 pt-3">
@@ -120,6 +128,9 @@ export function SessionList({
             <h1 className="text-sm font-semibold tracking-[-0.01em] text-ink">Sesiones</h1>
             <p className="text-[10px] text-faint">
               {sessions.length} {sessions.length === 1 ? "conversación" : "conversaciones"}
+              {attentionCount > 0
+                ? ` · ${attentionCount} ${attentionCount === 1 ? "pide" : "piden"} permiso`
+                : ""}
             </p>
           </div>
           <button
@@ -209,13 +220,14 @@ export function SessionList({
               <div className="space-y-0.5">
                 {group.items.map((session) => {
                   const running = runningIds.has(session.id);
+                  const attention = attentionIds?.has(session.id) ?? false;
                   const active = session.id === selectedId;
                   return (
                     <div
                       key={session.id}
                       role="button"
                       tabIndex={0}
-                      aria-busy={running}
+                      aria-busy={running || attention}
                       onClick={() => onSelect(session.id)}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
@@ -233,13 +245,15 @@ export function SessionList({
                       <span
                         className={cn(
                           "mt-1.5 size-1.5 shrink-0 rounded-full",
-                          running
-                            ? "animate-pulse bg-violet"
-                            : session.outcome === "failed"
-                              ? "bg-danger/70"
-                              : session.outcome === "interrupted"
-                                ? "bg-warning/70"
-                                : "bg-line",
+                          attention
+                            ? "animate-pulse bg-warning"
+                            : running
+                              ? "animate-pulse bg-violet"
+                              : session.outcome === "failed"
+                                ? "bg-danger/70"
+                                : session.outcome === "interrupted"
+                                  ? "bg-warning/70"
+                                  : "bg-line",
                         )}
                       />
                       <span className="min-w-0 flex-1">
@@ -249,6 +263,11 @@ export function SessionList({
                             {session.title ?? session.id}
                           </span>
                           <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] tabular-nums text-faint">
+                            {attention ? (
+                              <span title="Espera aprobación" aria-label="Pide permiso">
+                                <ShieldAlert size={11} className="text-warning" />
+                              </span>
+                            ) : null}
                             {running ? (
                               <Loader2 size={11} className="animate-spin text-violet-soft" />
                             ) : (

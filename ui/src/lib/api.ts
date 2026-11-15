@@ -7,6 +7,8 @@ import type {
   ModelRef,
   Project,
   ProviderInfo,
+  PermissionDecision,
+  PermissionRequest,
   Session,
   SessionMessage,
   SessionStats,
@@ -101,6 +103,33 @@ export const api = {
 
   interrupt: (id: string) =>
     request(`/api/session/${encodeURIComponent(id)}/interrupt`, { method: "POST" }),
+
+  permissionRequests: (directory?: string) =>
+    request<{ data: PermissionRequest[] }>(withLocation("/api/permission/request", directory)).then(
+      (value) => unwrapList<PermissionRequest>(value),
+    ),
+
+  sessionPermissions: (id: string) =>
+    request<{ data: PermissionRequest[] }>(
+      `/api/session/${encodeURIComponent(id)}/permission`,
+    ).then((value) => unwrapList<PermissionRequest>(value)),
+
+  replyPermission: (
+    sessionId: string,
+    requestId: string,
+    decision: PermissionDecision,
+    message?: string,
+  ) =>
+    request<void>(
+      `/api/session/${encodeURIComponent(sessionId)}/permission/${encodeURIComponent(requestId)}/reply`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          decision,
+          ...(message?.trim() ? { message: message.trim() } : {}),
+        }),
+      },
+    ),
 
   agents: (directory?: string) =>
     request<{ data: AgentInfo[] }>(withLocation("/api/agent", directory)).then((value) =>

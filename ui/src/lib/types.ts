@@ -40,6 +40,24 @@ export interface Session {
   parentID?: string;
 }
 
+export type PermissionDecision = "once" | "always" | "reject";
+
+/**
+ * Solicitud de permiso de OpenCode V2 (`permission.asked`).
+ * `resources` son los comandos/rutas afectados y `save` las reglas que se
+ * guardarían al responder «siempre».
+ */
+export interface PermissionRequest {
+  id: string;
+  sessionID: string;
+  action: string;
+  resources: string[];
+  save?: string[];
+  metadata?: Record<string, unknown>;
+  source?: { type: "tool"; messageID: string; id: string };
+  message?: string;
+}
+
 export interface AgentInfo {
   id: string;
   name: string;

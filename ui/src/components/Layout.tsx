@@ -13,12 +13,13 @@ import {
   MessagesSquare,
   Power,
   Settings,
+  ShieldAlert,
   Sparkles,
   X,
   LogOut,
 } from "lucide-react";
 import { useState, useRef, type TouchEvent } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { api } from "../lib/api";
 import { cn, shortPath } from "../lib/format";
 import { useFactoryHealth } from "../lib/hooks";
@@ -74,6 +75,21 @@ export function Layout() {
       }),
     staleTime: 5 * 60_000,
   });
+
+  // Solicitudes de permiso de la location activa: si el agente queda bloqueado,
+  // el aviso aparece en cualquier página para que no parezca un bucle.
+  const permissionRequests = useQuery({
+    queryKey: ["opencode", "permission-requests", project?.canonical ?? "default"],
+    queryFn: () => api.permissionRequests(project?.canonical),
+    enabled: Boolean(project?.canonical),
+    refetchInterval: 15_000,
+    refetchOnWindowFocus: true,
+    staleTime: 5_000,
+  });
+
+  const waitingPermissions = permissionRequests.data ?? [];
+  const waitingSessions = new Set(waitingPermissions.map((request) => request.sessionID)).size;
+  const onSessionsPage = location.pathname.startsWith("/sessions");
 
   const healthy = health.data?.ok === true;
 
@@ -317,6 +333,25 @@ export function Layout() {
             </NavLink>
           </div>
         </header>
+
+        {!onSessionsPage && waitingPermissions.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2 border-b border-warning/25 bg-warning/10 px-4 py-2 text-[11px] text-warning">
+            <ShieldAlert size={14} className="shrink-0" />
+            <span className="min-w-0 flex-1">
+              {waitingPermissions.length}{" "}
+              {waitingPermissions.length === 1 ? "solicitud espera" : "solicitudes esperan"} tu
+              aprobación{waitingSessions > 1 ? ` en ${waitingSessions} sesiones` : ""}. La
+              ejecución está en pausa.
+            </span>
+            <Link
+              to={`/sessions?session=${encodeURIComponent(waitingPermissions[0].sessionID)}`}
+              onClick={() => setMobileOpen(false)}
+              className="rounded-md border border-warning/40 px-2 py-0.5 font-medium text-warning transition-colors hover:bg-warning/15"
+            >
+              Revisar
+            </Link>
+          </div>
+        ) : null}
 
         {!online ? (
           <div className="border-b border-warning/25 bg-warning/10 px-4 py-2 text-[11px] text-warning">
