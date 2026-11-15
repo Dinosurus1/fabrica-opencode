@@ -32,6 +32,12 @@ function asNumber(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function asTimestamp(value: unknown): number {
+  const parsed = asNumber(value, Date.now());
+  // OpenCode puede emitir `created` en segundos o milisegundos.
+  return parsed > 0 && parsed < 1_000_000_000_000 ? parsed * 1_000 : parsed;
+}
+
 function entryKey(sessionId: string, messageID: string): string {
   return `${sessionId}:${messageID}`;
 }
@@ -76,7 +82,7 @@ export function applyStreamEvent(state: StreamState, event: LiveEvent): StreamSt
   const current = state[key] ? cloneEntry(state[key]) : {
     sessionId,
     messageID,
-    createdAt: asNumber(event.created, Date.now()),
+    createdAt: asTimestamp(event.created),
     text: new Map<number, string>(),
     reasoning: new Map<number, string>(),
   };

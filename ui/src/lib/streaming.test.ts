@@ -84,6 +84,14 @@ describe("applyStreamEvent", () => {
     ]);
   });
 
+  it("normaliza created en segundos a milisegundos", () => {
+    const state = feed([
+      delta("session.text.delta", { sessionID: "ses_1", assistantMessageID: "msg_1", delta: "x" }, 1_700_000_000),
+    ]);
+    const message = mergeStreamMessages([], state, "ses_1")[0];
+    expect(message.time?.created).toBe(1_700_000_000_000);
+  });
+
   it("borra los buffers de una sesión eliminada", () => {
     const state = feed([
       delta("session.text.delta", { ...start.data, delta: "x" }),

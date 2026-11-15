@@ -379,6 +379,10 @@ export function SessionsPage() {
     const streaming = STREAM_EVENTS.has(event.type);
     const textStream = /^session\.(text|reasoning)\./.test(event.type);
 
+    if (event.type === "session.deleted" && sessionID) {
+      setStreamState((current) => clearSessionStreams(current, sessionID));
+    }
+
     // El streaming de texto se acumula en local: no hace falta pedir el
     // contexto completo en cada delta. El contexto se refresca al terminar el
     // bloque y al llegar a un estado terminal.
