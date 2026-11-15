@@ -942,7 +942,7 @@ export function SessionsPage() {
       title: "",
       agent: defaultChatAgent(selected),
       model: selected?.model ? `${selected.model.providerID}/${selected.model.id}` : "",
-      profileId: profiles.data?.applied_profile_id ?? "",
+      profileId: profileSuggestion.data?.profile?.id ?? "",
       prompt: "",
     });
   };
@@ -956,7 +956,7 @@ export function SessionsPage() {
       title: truncate(`Continuación · ${selected.title ?? selected.id}`, 90),
       agent: defaultChatAgent(selected),
       model: selected.model ? `${selected.model.providerID}/${selected.model.id}` : "",
-      profileId: profiles.data?.applied_profile_id ?? "",
+      profileId: profileSuggestion.data?.profile?.id ?? "",
       prompt: buildHandoffPrompt(selected, context.data ?? []),
     });
   };
