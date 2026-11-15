@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Estado y activación de Tailscale Serve para la consola.
-# Usa el puerto 8443 para no chocar con otros servicios en 443 (por ejemplo el host principal).
+# Usa el puerto 8443 para no chocar con otros servicios en 443 (por ejemplo el Funnel).
 # La consola exige login propio; no expongas el puerto sin auth.
 set -euo pipefail
 
