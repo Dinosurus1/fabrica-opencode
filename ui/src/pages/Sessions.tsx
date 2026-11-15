@@ -28,7 +28,7 @@ import { api } from "../lib/api";
 import { useSessionEvents, runningSessionIds } from "../lib/events";
 import { cn, formatCompact, formatUsd, relativeTime, shortPath } from "../lib/format";
 import { rpc } from "../lib/rpc";
-import type { CatalogModel, PromptFileAttachment, Session, SessionMessage } from "../lib/types";
+import type { CatalogModel, Profile, PromptFileAttachment, Session, SessionMessage } from "../lib/types";
 
 interface NewChatDraft {
   title: string;
@@ -185,6 +185,7 @@ export function SessionsPage() {
   const [listOpen, setListOpen] = useState(() => !readStored(SELECTED_SESSION_KEY));
   const [agent, setAgent] = useState("");
   const [model, setModel] = useState("");
+  const [profileId, setProfileId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [newChat, setNewChat] = useState<NewChatDraft | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -229,6 +230,15 @@ export function SessionsPage() {
   const models = useQuery({
     queryKey: ["factory", "models", directory ?? "default"],
     queryFn: () => rpc<{ count: number; models: CatalogModel[] }>("models.list", { limit: 2000 }, directory),
+  });
+  const profiles = useQuery({
+    queryKey: ["factory", "profiles", directory ?? "default"],
+    queryFn: () =>
+      rpc<{ count: number; profiles: Profile[]; applied_profile_id?: string | null }>(
+        "profiles.list",
+        {},
+        directory,
+      ),
   });
 
   const selected = sessions.data?.find((session) => session.id === selectedId) ?? null;
@@ -334,6 +344,11 @@ export function SessionsPage() {
     setModel(selected.model ? `${selected.model.providerID}/${selected.model.id}` : "");
   }, [selected?.id, selected?.agent, selected?.model?.id, selected?.model?.providerID]);
 
+  useEffect(() => {
+    const applied = profiles.data?.applied_profile_id;
+    if (applied) setProfileId(applied);
+  }, [profiles.data?.applied_profile_id]);
+
   // Cada conversación conserva su borrador y sus adjuntos pendientes. El texto
   // se guarda en localStorage; los adjuntos quedan en memoria mientras la
   // pestaña siga abierta.
@@ -435,6 +450,36 @@ export function SessionsPage() {
       invalidateSessions(0);
     },
     onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
+  });
+
+  const applyProfile = useMutation({
+    mutationFn: (id: string) =>
+      rpc<{ applied: boolean; warnings?: string[]; session_updated?: boolean }>(
+        "profiles.apply",
+        { id, confirmed: true, session_id: selectedId },
+        directory,
+      ),
+    onSuccess: (result, id) => {
+      if (!result.applied) {
+        setProfileId(profiles.data?.applied_profile_id ?? "");
+        setNotice("El perfil no se aplicó: revisa su validación en Models.");
+        return;
+      }
+      const name = profiles.data?.profiles.find((item) => item.id === id)?.name ?? "perfil";
+      const warnings = result.warnings?.length ? ` Avisos: ${result.warnings.join(" ")}` : "";
+      setNotice(
+        `Perfil «${name}» aplicado a los agentes${result.session_updated ? " y a esta sesión" : ""}.${warnings}`,
+      );
+      void queryClient.invalidateQueries({ queryKey: ["factory", "profiles"] });
+      void queryClient.invalidateQueries({ queryKey: ["factory", "profile"] });
+      void queryClient.invalidateQueries({ queryKey: ["factory", "agents"] });
+      invalidateContext(0);
+      invalidateSessions(0);
+    },
+    onError: (error) => {
+      setProfileId(profiles.data?.applied_profile_id ?? "");
+      setNotice(error instanceof Error ? error.message : String(error));
+    },
   });
 
   const send = useMutation({
@@ -819,6 +864,30 @@ export function SessionsPage() {
             </header>
 
             <div className="grid grid-cols-2 gap-2 border-b border-line-soft bg-carbon-950/40 px-3 py-2 sm:flex sm:flex-wrap sm:items-center lg:px-4">
+              <label className="col-span-2 flex min-w-0 items-center gap-1.5 text-[10px] text-faint sm:col-span-1">
+                <span className="hidden shrink-0 font-mono sm:inline">perfil</span>
+                <select
+                  className="h-7 w-full min-w-0 rounded-md border border-line bg-carbon-900 px-2 text-[11px] text-ink outline-none focus:border-violet sm:max-w-[190px]"
+                  value={profileId}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setProfileId(next);
+                    applyProfile.mutate(next);
+                  }}
+                  disabled={!selectedId || running || applyProfile.isPending}
+                  title="Aplica un perfil de modelos a todos los agentes y cambia el modelo de esta sesión"
+                >
+                  {profileId && !(profiles.data?.profiles ?? []).some((item) => item.id === profileId) ? (
+                    <option value={profileId}>perfil actual</option>
+                  ) : null}
+                  {(profiles.data?.profiles ?? []).map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                      {item.id === profiles.data?.applied_profile_id ? " · aplicado" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="flex min-w-0 items-center gap-1.5 text-[10px] text-faint">
                 <Settings2 size={11} className="hidden shrink-0 sm:block" />
                 <select

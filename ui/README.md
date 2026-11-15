@@ -60,7 +60,7 @@ No publiques la consola en `0.0.0.0` sin poner delante autenticación y TLS.
 | Ruta | Qué muestra |
 |---|---|
 | `/` | Estado general, sesiones, steps, coste, uso por modelo y actividad reciente. |
-| `/sessions` | Sesiones raíz relevantes (sin subagentes ni temporales por defecto) con lista agrupada y búsqueda. Crear, abrir, eliminar (con confirmación), cambiar agente/modelo, enviar prompts con adjuntos (imágenes, PDFs y documentos), interrumpir, seguir la conversación en tiempo real por SSE y aviso de sesión larga con traspaso a una sesión nueva. Conserva el borrador y los adjuntos pendientes de cada conversación, y restaura la última sesión y los filtros al recargar. |
+| `/sessions` | Sesiones raíz relevantes (sin subagentes ni temporales por defecto) con lista agrupada y búsqueda. Crear, abrir, eliminar (con confirmación), cambiar agente/modelo/perfil, enviar prompts con adjuntos (imágenes, PDFs y documentos), interrumpir, seguir la conversación en tiempo real por SSE y aviso de sesión larga con traspaso a una sesión nueva. Conserva el borrador y los adjuntos pendientes de cada conversación, y restaura la última sesión y los filtros al recargar. |
 | `/work` | Tareas, planes, gates, revisiones, presupuesto global y execution log. |
 | `/agents` | Selección de agentes por proyecto, modo manual/híbrido/auto y modelo activo. |
 | `/models` | Catálogo real, perfiles (incluidos los predeterminados), recomendación de perfil por proyecto, política y asignación de modelo/presupuesto por rol. |
@@ -77,8 +77,9 @@ No publiques la consola en `0.0.0.0` sin poner delante autenticación y TLS.
 - **Validación previa**: el perfil falla si el modelo no existe, no está activo,
   no está autorizado, está prohibido, no soporta tools o no llega al contexto
   mínimo.
-- **Aplicar**: transforma los agentes de la location seleccionada. Exige
-  confirmación y queda en `factory_audit_events`.
+- **Aplicar**: transforma los agentes de la location seleccionada. Desde Models
+  exige confirmación; desde Sessions se aplica al elegir el perfil y se refleja
+  en el catálogo de agentes. Queda en `factory_audit_events`.
 - **Persistencia**: el ID del perfil aplicado se guarda por location en
   `factory_meta`; al recargar el plugin se restaura.
 - **Separación**: cambiar el modelo no altera permisos, prompts ni skills.
