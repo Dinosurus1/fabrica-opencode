@@ -15,7 +15,10 @@ import {
   Spinner,
 } from "../components/ui";
 import { cn, formatCompact, formatUsd } from "../lib/format";
+import { analyzePrompt, combinePromptAndProject } from "../lib/profile-detect";
+import { api } from "../lib/api";
 import { rpc } from "../lib/rpc";
+import { messageText } from "../components/sessions/Transcript";
 import type {
   CatalogAgent,
   CatalogModel,
@@ -98,6 +101,14 @@ export function ModelsPage() {
   const [confirmApply, setConfirmApply] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
+  const [detectSessionId, setDetectSessionId] = useState("");
+  const [detectingSession, setDetectingSession] = useState(false);
+  const [sessionRecommendation, setSessionRecommendation] = useState<{
+    name: string;
+    confidence: number;
+    reasons: string[];
+    profileId: string | null;
+  } | null>(null);
 
   const models = useQuery({
     queryKey: ["factory", "models", directory ?? "default"],
@@ -112,6 +123,11 @@ export function ModelsPage() {
     queryFn: () => rpc<{ count: number; profiles: Profile[]; applied_profile_id?: string | null }>("profiles.list", {}, directory),
   });
   const appliedProfileId = profiles.data?.applied_profile_id ?? null;
+  const detectSessions = useQuery({
+    queryKey: ["opencode", "sessions", "detect-profile"],
+    queryFn: () => api.sessions(120),
+    staleTime: 30_000,
+  });
   const profile = useQuery({
     queryKey: ["factory", "profile", selectedProfileId, directory ?? "default"],
     queryFn: () => rpc<Profile>("profiles.get", { id: selectedProfileId }, directory),
@@ -240,6 +256,43 @@ export function ModelsPage() {
       rpc<ProfileRecommendation>("profiles.recommend", { project_id: projectId, directory }, directory),
     onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
   });
+
+  const analyzeSession = async () => {
+    if (!detectSessionId) return;
+    setDetectingSession(true);
+    setSessionRecommendation(null);
+    try {
+      const messages = await api.sessionContext(detectSessionId);
+      const text = messages
+        .filter((item) => item.type === "user")
+        .slice(-12)
+        .map((item) => messageText(item))
+        .filter(Boolean)
+        .join("\n");
+      if (!text.trim()) {
+        setNotice("La sesión no tiene mensajes de usuario para analizar.");
+        return;
+      }
+      const combined = combinePromptAndProject(analyzePrompt(text), recommend.data);
+      const match = (profiles.data?.profiles ?? []).find(
+        (item) => item.name === combined.recommended,
+      );
+      if (!combined.recommended) {
+        setNotice("No hay señales suficientes en la sesión para sugerir un perfil.");
+        return;
+      }
+      setSessionRecommendation({
+        name: combined.recommended,
+        confidence: combined.confidence,
+        reasons: combined.reasons,
+        profileId: match?.id ?? null,
+      });
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDetectingSession(false);
+    }
+  };
 
   const save = useMutation({
     mutationFn: async () => {
@@ -464,6 +517,72 @@ export function ModelsPage() {
           </div>
         </div>
       ) : null}
+
+      <div className="surface px-4 py-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-ink">Detectar perfil por sesión</p>
+            <p className="mt-0.5 text-[11px] leading-5 text-muted">
+              Analiza los últimos pedidos de una conversación concreta y combina el resultado con
+              las señales del proyecto. No aplica nada; puedes revisarlo antes.
+            </p>
+          </div>
+          <label className="flex min-w-0 items-center gap-2 text-[10px] text-faint">
+            <span className="shrink-0">Sesión</span>
+            <select
+              className="h-8 max-w-[260px] rounded-md border border-line bg-carbon-900 px-2 text-[11px] text-ink outline-none focus:border-violet"
+              value={detectSessionId}
+              onChange={(event) => {
+                setDetectSessionId(event.target.value);
+                setSessionRecommendation(null);
+              }}
+            >
+              <option value="">Elige una sesión</option>
+              {(detectSessions.data ?? [])
+                .filter((session) => !session.parentID && !session.location?.directory?.startsWith("/tmp/"))
+                .map((session) => (
+                  <option key={session.id} value={session.id}>
+                    {session.title ?? session.id}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <Button
+            className="h-8 px-2.5 text-xs"
+            onClick={() => void analyzeSession()}
+            disabled={!detectSessionId || detectingSession}
+          >
+            <Sparkles size={13} className={detectingSession ? "animate-pulse" : undefined} />
+            {detectingSession ? "Analizando…" : "Analizar sesión"}
+          </Button>
+        </div>
+        {sessionRecommendation ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-violet/25 bg-violet/[0.06] px-3 py-2 text-[11px]">
+            <Badge tone="violet">
+              {Math.round(sessionRecommendation.confidence * 100)} % confianza
+            </Badge>
+            <span className="font-medium text-ink">
+              Perfil sugerido por la sesión: {sessionRecommendation.name}
+            </span>
+            <span className="min-w-0 flex-1 text-muted">
+              {sessionRecommendation.reasons.slice(0, 2).join(" · ")}
+            </span>
+            {sessionRecommendation.profileId ? (
+              <Button
+                className="h-7 px-2 text-[11px]"
+                onClick={() => {
+                  setSelectedProfileId(sessionRecommendation.profileId!);
+                  setNotice(
+                    `Perfil seleccionado: ${sessionRecommendation.name}. Revísalo y pulsa Aplicar.`,
+                  );
+                }}
+              >
+                Ver perfil
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
 
       <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
         <Section

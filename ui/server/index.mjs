@@ -5,10 +5,11 @@
  *
  * Fase 0: login, rate limit, cabeceras de seguridad, /healthz y arranque del
  * upstream. Fase 1: PWA y acceso remoto con auth (Tailscale Serve delante).
+ * Fase 2: estado del repo de solo lectura para /status y el traspaso.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import { homedir } from "node:os";
 import { extname, join, normalize, resolve, sep } from "node:path";
@@ -352,6 +353,50 @@ function proxy(req, res) {
   req.pipe(upstream);
 }
 
+/**
+ * Estado de solo lectura del repositorio para `/status` y el traspaso.
+ * Ejecuta git sin shell y devuelve solo rama, último commit y archivos con
+ * cambios; no incluye remotos, configuración ni credenciales.
+ */
+function repoStatus(directory) {
+  if (typeof directory !== "string" || !directory.startsWith("/")) {
+    return { ok: false, error: "directorio inválido" };
+  }
+  let root;
+  try {
+    root = realpathSync(directory);
+  } catch {
+    return { ok: false, error: "el directorio no existe" };
+  }
+  const run = (args) =>
+    spawnSync("git", ["-C", root, ...args], {
+      encoding: "utf8",
+      timeout: 4_000,
+      maxBuffer: 1024 * 1024,
+    });
+  const top = run(["rev-parse", "--show-toplevel"]);
+  if (top.status !== 0 || !String(top.stdout ?? "").trim()) {
+    return { ok: false, error: "no es un repositorio git" };
+  }
+  const repository = String(top.stdout).trim();
+  const branch = run(["rev-parse", "--abbrev-ref", "HEAD"]);
+  const commit = run(["log", "-1", "--format=%h %s"]);
+  const status = run(["status", "--porcelain=v1"]);
+  const files = String(status.stdout ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return {
+    ok: true,
+    root: repository,
+    branch: String(branch.stdout ?? "").trim() || "(detached)",
+    last_commit: String(commit.stdout ?? "").trim(),
+    dirty: files.slice(0, 40),
+    clean: files.length === 0,
+    truncated: files.length > 40,
+  };
+}
+
 async function upstreamStatus() {
   try {
     const response = await fetch(new URL("/info", target.origin), {
@@ -522,6 +567,11 @@ async function handleRequest(req, res) {
       }
       const result = await startUpstream();
       sendJson(res, result.ok ? 200 : 503, result);
+      return;
+    }
+
+    if (url.pathname === "/api/repo/status" && req.method === "GET") {
+      sendJson(res, 200, repoStatus(url.searchParams.get("directory") ?? ""));
       return;
     }
 

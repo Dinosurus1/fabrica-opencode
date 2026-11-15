@@ -9,6 +9,7 @@ import type {
   ProviderInfo,
   PermissionDecision,
   PermissionRequest,
+  RepoStatus,
   Session,
   SessionMessage,
   SessionStats,
@@ -155,6 +156,11 @@ export const api = {
     ),
 
   config: (directory?: string) => request<unknown>(withLocation("/api/config", directory)),
+
+  repoStatus: (directory?: string) =>
+    request<RepoStatus>(
+      `/api/repo/status${directory ? `?directory=${encodeURIComponent(directory)}` : ""}`,
+    ),
 
   stats: (directory?: string) =>
     request<{ data: SessionStats }>(withLocation("/api/experimental/session/stats", directory)).then(

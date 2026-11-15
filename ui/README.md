@@ -146,6 +146,12 @@ Factory Console (React/Vite)
   `POST /api/session/:id/permission/:requestId/reply` (`once`, `always`,
   `reject` + motivo opcional). Mientras no se responde, OpenCode mantiene la
   herramienta en pausa y la sesión figura como «running».
+- El compositor admite comandos de barra (`/models`, `/agent`, `/status`,
+  `/continue`, `/checkpoint`, `/cd`, `/help`). Se ejecutan en el cliente; `/status`
+  lee `GET /api/repo/status` (git de solo lectura) y nunca pregunta al modelo.
+- La continuación usa un traspaso estructurado con el último pedido completo y
+  el estado del repo. El linaje raíz → hija se guarda en `localStorage` durante
+  el MVP; no se sincroniza entre dispositivos hasta la etapa 2.
 - Los adjuntos se envían como data URI en `files[].uri`; OpenCode los convierte
   en adjuntos inline. El límite de la consola es 6 archivos de 8 MB (20 MB en
   total) por mensaje.

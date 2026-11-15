@@ -69,7 +69,7 @@ npm run test:e2e       # build + Playwright (servidor propio en :4174)
   conservar borrador y adjunto tras recargar, borrar chat y navegación móvil.
 - El E2E usa el Chromium del sistema (`PLAYWRIGHT_CHROMIUM`) y no descarga
   navegadores.
-- Resultado actual: 51 pruebas unitarias/componente y 4 E2E en verde.
+- Resultado actual: 72 pruebas unitarias/componente y 4 E2E en verde.
 
 ## Fase 1 — Móvil, PWA y acceso remoto
 
@@ -167,6 +167,63 @@ Si no se usan tags, limita el acceso a los dispositivos del propietario y evita
   siguen en el compositor y el error queda visible; no hay cola automática.
 - **Adjuntos pendientes** en IndexedDB (7 días) y restauración de scroll por
   sesión, ya cubiertos en Fase 1.
+
+### Comandos de barra
+
+Se ejecutan en el cliente y no se envían al modelo salvo que el comando lo
+decida:
+
+| Comando | Qué hace |
+|---|---|
+| `/models [proveedor/modelo]` | Lista o cambia el modelo de la sesión. |
+| `/agent [id]` | Lista o cambia el agente. |
+| `/status` | Lee el repo con git (rama, último commit, archivos con cambios) y muestra el consumo de la sesión. |
+| `/continue` | Abre el traspaso estructurado a una sesión nueva. |
+| `/checkpoint` | Guarda el traspaso en el navegador y lo abre para revisarlo. |
+| `/cd [proyecto]` | Cambia el proyecto activo; no es un shell. |
+| `/help` | Lista los comandos. |
+
+`/status` usa `GET /api/repo/status?directory=…`, un endpoint de solo lectura
+que ejecuta git sin shell y no devuelve remotos ni credenciales. El menú de
+comandos se abre al escribir `/` en el compositor (↑↓, Tab, Enter, Esc).
+
+### Continuación inteligente (MVP)
+
+- Traspaso estructurado con objetivo, último pedido **textual y completo**,
+  último estado, hecho/en curso/pendiente, decisiones, repo, bugs abiertos y
+  restricciones.
+- Si el último mensaje ya es un traspaso, se extrae su `## Último pedido` en
+  lugar de resumir el resumen.
+- Vista previa editable, contador de tokens, aviso si supera 4-6k, botón
+  «Ampliar», elementos fijados y lista de qué se deja fuera.
+- Título `<objetivo> · parte N`; no se repite «Continuación».
+- Linaje raíz → hija en `localStorage` (MVP). **No se sincroniza entre
+  dispositivos hasta la etapa 2.**
+- El primer mensaje pide al asistente confirmar en 5 líneas qué entendió antes
+  de actuar.
+- Se conserva el método anterior como alternativa («Usar el resumen anterior»).
+
+### Detección de perfil
+
+- En `Models` se puede elegir una sesión y analizar sus últimos pedidos; el
+  resultado se combina con las señales del proyecto.
+- En el compositor, un prompt o planning sugiere un perfil (por ejemplo,
+  planificación → `Proyecto grande`) y ofrece aplicarlo; el selector manual
+  sigue disponible.
+- La clasificación es determinística y local (`profile-detect.ts`); no llama a
+  un modelo.
+
+## Memoria persistente
+
+- Cada memoria inyectada se recorta a ~1.200 caracteres y el bloque total a
+  ~8.000; las memorias que no caben se marcan como omitidas.
+- La búsqueda se limita al proyecto actual más las preferencias y convenciones
+  globales. Los hechos y decisiones globales de otros proyectos no se inyectan.
+- El filtro de privacidad rechaza hosts concretos `*.ts.net`, correos e IPs
+  privadas (RFC1918/CGNAT) al guardar memorias nuevas. No bloquea `127.0.0.1`
+  ni el patrón genérico `*.ts.net`.
+- El linaje de sesiones del MVP vive en `localStorage`; no se guarda en
+  PostgreSQL hasta la etapa 2.
 
 ## Modelo de amenaza
 

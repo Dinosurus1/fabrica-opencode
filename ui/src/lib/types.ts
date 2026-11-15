@@ -6,6 +6,18 @@ export interface Project {
   sandboxes?: unknown[];
 }
 
+/** Estado de solo lectura del repositorio (`GET /api/repo/status`). */
+export interface RepoStatus {
+  ok: boolean;
+  root?: string;
+  branch?: string;
+  last_commit?: string;
+  dirty?: string[];
+  clean?: boolean;
+  truncated?: boolean;
+  error?: string;
+}
+
 export interface ModelRef {
   id: string;
   providerID: string;

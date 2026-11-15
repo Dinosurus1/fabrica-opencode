@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Send,
   Settings2,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -22,20 +23,42 @@ import {
   useFileAttachments,
 } from "../components/sessions/attachments";
 import { SessionList } from "../components/sessions/SessionList";
+import { CommandMenu } from "../components/sessions/CommandMenu";
 import { PermissionsPanel } from "../components/sessions/Permissions";
 import { messageText, Transcript } from "../components/sessions/Transcript";
 import { useProject } from "../components/ProjectContext";
 import { Button, ConfirmDialog, Field, Modal } from "../components/ui";
 import { api } from "../lib/api";
 import { deleteAttachments, pruneAttachments, readAttachments, writeAttachments } from "../lib/attachmentStore";
+import { findCommand, helpText, parseSlash, suggestCommands } from "../lib/commands";
 import { useSessionEvents, runningSessionIds } from "../lib/events";
 import { cn, formatCompact, formatUsd, relativeTime, shortPath } from "../lib/format";
+import {
+  applyPinnedSections,
+  buildHandoff,
+  estimateTokens,
+  formatRepoStatus,
+  HANDOFF_SECTION_LABELS,
+  readCheckpoint,
+  saveCheckpoint,
+  type Handoff,
+  type HandoffSection,
+} from "../lib/handoff";
+import {
+  baseTitle,
+  ensureRoot,
+  generationForChild,
+  lineageChain,
+  registerChild,
+  titleForHandoff,
+} from "../lib/lineage";
 import {
   applyPermissionEvent,
   replaceSessionPermissions,
   seedPermissions,
   sessionIdFromEvent,
 } from "../lib/permissions";
+import { analyzePrompt, combinePromptAndProject } from "../lib/profile-detect";
 import { rpc } from "../lib/rpc";
 import {
   applyStreamEvent,
@@ -55,6 +78,12 @@ import type {
   SessionMessage,
 } from "../lib/types";
 
+interface HandoffMeta {
+  tokens: number;
+  dropped: string[];
+  pinned: HandoffSection[];
+}
+
 interface NewChatDraft {
   mode: "new" | "continuation";
   title: string;
@@ -62,6 +91,24 @@ interface NewChatDraft {
   model: string;
   profileId: string;
   prompt: string;
+  objective: string;
+  parentId: string | null;
+  parentTitle: string;
+  generation: number;
+  titleTouched: boolean;
+  profileTouched: boolean;
+  handoff: HandoffMeta | null;
+}
+
+interface CommandPanelState {
+  title: string;
+  body: string;
+}
+
+interface CommandPickerState {
+  title: string;
+  options: Array<{ label: string; value: string }>;
+  onPick: (value: string) => void;
 }
 
 interface NewChatRequest extends NewChatDraft {
@@ -201,7 +248,7 @@ function buildHandoffPrompt(session: Session, messages: SessionMessage[]): strin
 }
 
 export function SessionsPage() {
-  const { projectId, project } = useProject();
+  const { projectId, project, projects, setProjectId } = useProject();
   const directory = project?.canonical;
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -223,6 +270,12 @@ export function SessionsPage() {
   const [optimistic, setOptimistic] = useState<OptimisticMessage | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [commandIndex, setCommandIndex] = useState(0);
+  const [commandDismissed, setCommandDismissed] = useState(false);
+  const [commandPanel, setCommandPanel] = useState<CommandPanelState | null>(null);
+  const [commandPicker, setCommandPicker] = useState<CommandPickerState | null>(null);
+  const [detectPrompt, setDetectPrompt] = useState("");
+  const [promptExpanded, setPromptExpanded] = useState(false);
   const attachments = useFileAttachments((files) => {
     const sessionId = selectedRef.current;
     if (sessionId) void writeAttachments(sessionId, files);
@@ -279,7 +332,7 @@ export function SessionsPage() {
   const profileSuggestion = useQuery({
     queryKey: ["factory", "profile-recommend", directory ?? "default"],
     queryFn: () => rpc<ProfileRecommendation>("profiles.recommend", {}, directory),
-    enabled: Boolean(directory) && Boolean(newChat),
+    enabled: Boolean(directory),
     staleTime: 60_000,
   });
 
@@ -854,7 +907,16 @@ export function SessionsPage() {
         prompted: Boolean(draft.prompt.trim() || draft.files.length),
       };
     },
-    onSuccess: async ({ created, promptError, profileWarning, prompted }) => {
+    onSuccess: async ({ created, promptError, profileWarning, prompted }, draft) => {
+      if (draft.mode === "continuation" && draft.parentId) {
+        registerChild(
+          draft.parentId,
+          draft.parentTitle,
+          created.id,
+          draft.objective || created.title || "Sesión",
+          draft.title,
+        );
+      }
       setNewChat(null);
       draftAttachments.clear();
       setSelectedId(created.id);
@@ -944,21 +1006,106 @@ export function SessionsPage() {
       model: selected?.model ? `${selected.model.providerID}/${selected.model.id}` : "",
       profileId: profileSuggestion.data?.profile?.id ?? "",
       prompt: "",
+      objective: "",
+      parentId: null,
+      parentTitle: "",
+      generation: 0,
+      titleTouched: false,
+      profileTouched: false,
+      handoff: null,
     });
   };
 
-  const openContinuation = () => {
+  const buildCurrentHandoff = async (objective: string): Promise<Handoff | null> => {
+    if (!selected) return null;
+    const repo = await api.repoStatus(directory).catch(() => null);
+    let decisions: string[] = [];
+    try {
+      const result = await rpc<{ memories: Array<{ title?: string | null; content: string }> }>(
+        "memory.list",
+        { project_id: projectId, kind: "decision", search: objective, limit: 4 },
+        directory,
+      );
+      decisions = (result.memories ?? []).map((memory) =>
+        memory.title ? `${memory.title}: ${memory.content}` : memory.content,
+      );
+    } catch {
+      // La memoria es opcional; el traspaso sigue con el historial y el repo.
+    }
+    return buildHandoff({
+      session: selected,
+      messages: context.data ?? [],
+      repo,
+      decisions,
+      objective,
+    });
+  };
+
+  const startContinuation = (
+    objective: string,
+    promptText: string,
+    meta: HandoffMeta | null,
+    generation: number,
+    parentId: string,
+    parentTitle: string,
+  ) => {
+    setNewChat({
+      mode: "continuation",
+      title: titleForHandoff(objective, generation),
+      agent: defaultChatAgent(selected),
+      model: selected?.model ? `${selected.model.providerID}/${selected.model.id}` : "",
+      profileId: profileSuggestion.data?.profile?.id ?? "",
+      prompt: promptText,
+      objective,
+      parentId,
+      parentTitle,
+      generation,
+      titleTouched: false,
+      profileTouched: false,
+      handoff: meta,
+    });
+  };
+
+  const openContinuation = async () => {
     if (!selected) return;
     setNotice(null);
     draftAttachments.clear();
-    setNewChat({
-      mode: "continuation",
-      title: truncate(`Continuación · ${selected.title ?? selected.id}`, 90),
-      agent: defaultChatAgent(selected),
-      model: selected.model ? `${selected.model.providerID}/${selected.model.id}` : "",
-      profileId: profileSuggestion.data?.profile?.id ?? "",
-      prompt: buildHandoffPrompt(selected, context.data ?? []),
-    });
+    const objective = baseTitle(selected.title) || "Sesión";
+    ensureRoot(selected.id, selected.title);
+    const generation = generationForChild(selected.id, selected.title);
+    startContinuation(objective, "", null, generation, selected.id, selected.title ?? selected.id);
+    const handoff = await buildCurrentHandoff(objective);
+    if (!handoff) return;
+    setNewChat((current) =>
+      current && current.mode === "continuation" && !current.prompt
+        ? {
+            ...current,
+            prompt: handoff.text,
+            handoff: { tokens: handoff.tokens, dropped: handoff.dropped, pinned: [] },
+          }
+        : current,
+    );
+  };
+
+  const openCheckpoint = async () => {
+    if (!selected) return;
+    setNotice(null);
+    draftAttachments.clear();
+    const objective = baseTitle(selected.title) || "Sesión";
+    ensureRoot(selected.id, selected.title);
+    const generation = generationForChild(selected.id, selected.title);
+    const handoff = await buildCurrentHandoff(objective);
+    if (!handoff) return;
+    saveCheckpoint(selected.id, handoff);
+    setNotice(`Checkpoint guardado (~${handoff.tokens} tokens). Revísalo antes de crear la sesión.`);
+    startContinuation(
+      handoff.objective,
+      handoff.text,
+      { tokens: handoff.tokens, dropped: handoff.dropped, pinned: [] },
+      generation,
+      selected.id,
+      selected.title ?? selected.id,
+    );
   };
 
   const selectSession = (id: string) => {
@@ -969,6 +1116,7 @@ export function SessionsPage() {
   };
 
   const updatePrompt = (value: string) => {
+    setCommandDismissed(false);
     setPrompt(value);
     if (selectedId) writeDraft(selectedId, value);
   };
@@ -978,6 +1126,171 @@ export function SessionsPage() {
     if (!selectedId) return;
     if ((!text && attachments.files.length === 0) || send.isPending || attachments.reading) return;
     send.mutate({ sessionId: selectedId, text, files: attachments.files });
+  };
+
+  // Clasificación del borrador con retardo: no se recalcula en cada tecla.
+  useEffect(() => {
+    const timer = setTimeout(() => setDetectPrompt(prompt), 600);
+    return () => clearTimeout(timer);
+  }, [prompt]);
+
+  const commandMatches = useMemo(
+    () => (commandDismissed ? [] : suggestCommands(prompt)),
+    [prompt, commandDismissed],
+  );
+  const commandOpen = commandMatches.length > 0 && !prompt.includes("\n");
+  const activeCommandIndex = commandMatches.length
+    ? commandIndex % commandMatches.length
+    : 0;
+
+  const liveRecommendation = useMemo(
+    () => combinePromptAndProject(analyzePrompt(detectPrompt), profileSuggestion.data),
+    [detectPrompt, profileSuggestion.data],
+  );
+  const liveProfile = useMemo(
+    () =>
+      (profiles.data?.profiles ?? []).find(
+        (item) => item.name === liveRecommendation.recommended,
+      ) ?? null,
+    [profiles.data, liveRecommendation.recommended],
+  );
+
+  const draftRecommendation = useMemo(
+    () => combinePromptAndProject(analyzePrompt(newChat?.prompt ?? ""), profileSuggestion.data),
+    [newChat?.prompt, profileSuggestion.data],
+  );
+  const draftProfile = useMemo(
+    () =>
+      (profiles.data?.profiles ?? []).find(
+        (item) => item.name === draftRecommendation.recommended,
+      ) ?? null,
+    [profiles.data, draftRecommendation.recommended],
+  );
+
+  useEffect(() => {
+    if (!newChat || newChat.profileTouched || !draftProfile) return;
+    setNewChat((current) =>
+      current && !current.profileTouched && current.profileId !== draftProfile.id
+        ? { ...current, profileId: draftProfile.id }
+        : current,
+    );
+  }, [draftProfile?.id, newChat?.profileTouched]);
+
+  const showStatus = async () => {
+    const repo = await api.repoStatus(directory).catch((error) => ({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    const sessionLine = selected
+      ? `Sesión: ${selected.title ?? selected.id}\nContexto: ${formatCompact(contextTokens)} / ${
+          contextLimit ? formatCompact(contextLimit) : "?"
+        } (${contextRatio} %)\nCoste: ${formatUsd(selected.cost)}`
+      : "Sin sesión seleccionada.";
+    setCommandPanel({ title: "Estado", body: formatRepoStatus(repo, sessionLine) });
+  };
+
+  const runCommand = (name: string, arg: string) => {
+    updatePrompt("");
+    switch (name) {
+      case "models": {
+        const options = modelsByProvider.flatMap(([provider, list]) =>
+          list.map((item) => ({
+            label: `${provider}/${item.modelId} — ${item.name ?? item.modelId}`,
+            value: `${provider}/${item.modelId}`,
+          })),
+        );
+        if (arg) {
+          const exists = options.some((option) => option.value === arg);
+          if (!exists) {
+            setNotice(`Modelo no encontrado: ${arg}. Usa /models para ver la lista.`);
+            return;
+          }
+          switchModel.mutate(arg);
+          setNotice(`Modelo cambiado a ${arg}.`);
+          return;
+        }
+        setCommandPicker({
+          title: "Modelos",
+          options,
+          onPick: (value) => {
+            switchModel.mutate(value);
+            setCommandPicker(null);
+            setNotice(`Modelo cambiado a ${value}.`);
+          },
+        });
+        return;
+      }
+      case "agent": {
+        const options = chatAgents.map((item) => ({
+          label: `${item.id} — ${item.mode}`,
+          value: item.id,
+        }));
+        if (arg) {
+          const exists = options.some((option) => option.value === arg);
+          if (!exists) {
+            setNotice(`Agente no encontrado: ${arg}. Usa /agent para ver la lista.`);
+            return;
+          }
+          switchAgent.mutate(arg);
+          setNotice(`Agente cambiado a ${arg}.`);
+          return;
+        }
+        setCommandPicker({
+          title: "Agentes",
+          options,
+          onPick: (value) => {
+            switchAgent.mutate(value);
+            setCommandPicker(null);
+            setNotice(`Agente cambiado a ${value}.`);
+          },
+        });
+        return;
+      }
+      case "status":
+        void showStatus();
+        return;
+      case "continue":
+        void openContinuation();
+        return;
+      case "checkpoint":
+        void openCheckpoint();
+        return;
+      case "cd": {
+        if (arg) {
+          const needle = arg.toLowerCase();
+          const match = projects.find(
+            (item) =>
+              item.id === arg ||
+              item.canonical.toLowerCase() === needle ||
+              item.canonical.toLowerCase().endsWith(`/${needle}`) ||
+              item.canonical.split("/").pop()?.toLowerCase() === needle,
+          );
+          if (!match) {
+            setNotice(`Proyecto no encontrado: ${arg}. Usa /cd para ver la lista.`);
+            return;
+          }
+          setProjectId(match.id);
+          setNotice(`Proyecto activo: ${match.canonical}`);
+          return;
+        }
+        setCommandPicker({
+          title: "Proyectos",
+          options: projects.map((item) => ({ label: item.canonical, value: item.id })),
+          onPick: (value) => {
+            const match = projects.find((item) => item.id === value);
+            setProjectId(value);
+            setCommandPicker(null);
+            setNotice(match ? `Proyecto activo: ${match.canonical}` : "Proyecto cambiado.");
+          },
+        });
+        return;
+      }
+      case "help":
+        setCommandPanel({ title: "Comandos", body: helpText() });
+        return;
+      default:
+        setNotice(`Comando no reconocido: /${name}. Usa /help.`);
+    }
   };
 
   const liveTone = live.status === "live" ? "live" : live.status === "offline" ? "offline" : "connecting";
@@ -991,6 +1304,33 @@ export function SessionsPage() {
           : "Conectando…";
 
   const totalSessions = filtered.length;
+  const draftTokens = newChat ? estimateTokens(newChat.prompt) : 0;
+  const draftLineage =
+    newChat?.mode === "continuation" && newChat.parentId
+      ? lineageChain(newChat.parentId)
+      : [];
+  const parentSession = newChat?.parentId
+    ? sessions.data?.find((session) => session.id === newChat.parentId) ?? null
+    : null;
+  const existingCheckpoint = newChat?.parentId ? readCheckpoint(newChat.parentId) : null;
+
+  const togglePin = (section: HandoffSection) => {
+    setNewChat((current) => {
+      if (!current) return current;
+      const pinned = current.handoff?.pinned ?? [];
+      const nextPinned = pinned.includes(section)
+        ? pinned.filter((item) => item !== section)
+        : [...pinned, section];
+      const text = applyPinnedSections(current.prompt, nextPinned);
+      return {
+        ...current,
+        prompt: text,
+        handoff: current.handoff
+          ? { ...current.handoff, pinned: nextPinned, tokens: estimateTokens(text) }
+          : { tokens: estimateTokens(text), dropped: [], pinned: nextPinned },
+      };
+    });
+  };
   return (
     <div className="flex h-[calc(var(--app-height,100dvh)-6.5rem-3.5rem-env(safe-area-inset-bottom))] gap-3 lg:h-[calc(var(--app-height,100dvh)-6.5rem)]">
       {listOpen ? (
@@ -1313,11 +1653,34 @@ export function SessionsPage() {
               sessionId={selected.id}
             />
 
+            {liveProfile && liveRecommendation.confidence >= 0.62 && liveProfile.id !== profileId && !running ? (
+              <div className="border-t border-violet/20 bg-violet/[0.06] px-3 py-2 lg:px-6">
+                <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 text-[11px] text-violet-soft">
+                  <Sparkles size={12} className="shrink-0" />
+                  <span className="min-w-0 flex-1">
+                    Perfil sugerido para este pedido: <strong>{liveProfile.name}</strong> (
+                    {Math.round(liveRecommendation.confidence * 100)} %).{" "}
+                    {liveRecommendation.reasons[0] ?? "Encaja con el prompt."}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded-md border border-violet/40 px-2 py-0.5 font-medium text-violet-soft transition-colors hover:bg-violet/15"
+                    onClick={() => {
+                      setProfileId(liveProfile.id);
+                      applyProfile.mutate(liveProfile.id);
+                    }}
+                  >
+                    Aplicar
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             <div className="border-t border-line-soft bg-carbon-900/80 px-3 py-3 lg:px-6">
               <div className="mx-auto w-full max-w-3xl">
                 <div
                   className={cn(
-                    "rounded-xl border bg-carbon-950 px-3 py-2.5 transition-colors focus-within:border-violet/60",
+                    "relative rounded-xl border bg-carbon-950 px-3 py-2.5 transition-colors focus-within:border-violet/60",
                     dragging ? "border-violet ring-1 ring-violet/30" : "border-line",
                   )}
                   onDragOver={(event) => {
@@ -1334,6 +1697,15 @@ export function SessionsPage() {
                     if (event.dataTransfer.files.length) void addAttachmentsToCurrent(event.dataTransfer.files);
                   }}
                 >
+                  <CommandMenu
+                    commands={commandOpen ? commandMatches : []}
+                    activeIndex={activeCommandIndex}
+                    onPick={(command) => {
+                      updatePrompt(`/${command.name} `);
+                      setCommandIndex(0);
+                      textareaRef.current?.focus();
+                    }}
+                  />
                   <AttachmentChips
                     files={attachments.files}
                     onRemove={attachments.remove}
@@ -1346,8 +1718,46 @@ export function SessionsPage() {
                     value={prompt}
                     onChange={(event) => updatePrompt(event.target.value)}
                     onKeyDown={(event) => {
+                      if (commandOpen) {
+                        if (event.key === "ArrowDown") {
+                          event.preventDefault();
+                          setCommandIndex((index) => (index + 1) % commandMatches.length);
+                          return;
+                        }
+                        if (event.key === "ArrowUp") {
+                          event.preventDefault();
+                          setCommandIndex(
+                            (index) => (index - 1 + commandMatches.length) % commandMatches.length,
+                          );
+                          return;
+                        }
+                        if (event.key === "Tab") {
+                          event.preventDefault();
+                          const command = commandMatches[activeCommandIndex];
+                          if (command) updatePrompt(`/${command.name} `);
+                          setCommandIndex(0);
+                          return;
+                        }
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          setCommandDismissed(true);
+                          return;
+                        }
+                        if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          const command = commandMatches[activeCommandIndex];
+                          if (command) runCommand(command.name, "");
+                          return;
+                        }
+                      }
                       if (event.key === "Enter" && !event.shiftKey) {
                         event.preventDefault();
+                        const parsed = parseSlash(prompt);
+                        if (parsed) {
+                          if (findCommand(parsed.name)) runCommand(parsed.name, parsed.arg);
+                          else setNotice(`Comando no reconocido: /${parsed.name}. Usa /help.`);
+                          return;
+                        }
                         sendPrompt();
                       }
                     }}
@@ -1413,9 +1823,13 @@ export function SessionsPage() {
       <Modal
         open={Boolean(newChat)}
         title={newChat?.mode === "continuation" ? "Continuar en nueva sesión" : "Nuevo chat"}
-        description="Una sesión limpia evita arrastrar historial y tokens. Si vienes de una sesión larga, el resumen de traspaso es editable."
+        description={
+          newChat?.mode === "continuation"
+            ? "Traspaso estructurado: último pedido completo, estado, repo y decisiones. Editable; nada se envía hasta crear la sesión."
+            : "Una sesión limpia evita arrastrar historial y tokens."
+        }
         onClose={() => setNewChat(null)}
-        width="max-w-2xl"
+        width={promptExpanded ? "max-w-5xl" : "max-w-2xl"}
         footer={
           <>
             <Button variant="ghost" onClick={() => setNewChat(null)}>
@@ -1424,7 +1838,13 @@ export function SessionsPage() {
             <Button
               variant="primary"
               onClick={() => newChat && createChat.mutate({ ...newChat, files: draftAttachments.files })}
-              disabled={!newChat || createChat.isPending || !newChat.agent || draftAttachments.reading}
+              disabled={
+                !newChat ||
+                createChat.isPending ||
+                !newChat.agent ||
+                draftAttachments.reading ||
+                (newChat.mode === "continuation" && !newChat.prompt.trim())
+              }
             >
               {createChat.isPending ? "Creando…" : "Crear chat"}
             </Button>
@@ -1433,11 +1853,52 @@ export function SessionsPage() {
       >
         {newChat ? (
           <div className="space-y-3">
+            {newChat.mode === "continuation" ? (
+              <div className="rounded-lg border border-violet/25 bg-violet/[0.06] px-3 py-2 text-[10px] leading-4 text-muted">
+                <p className="font-medium text-violet-soft">Traspaso estructurado</p>
+                <p className="mt-0.5">
+                  Se lleva el objetivo, el último pedido textual completo, el estado, las decisiones,
+                  el repo, los bugs y las restricciones. Todo es editable.
+                </p>
+                <p className="mt-1 text-faint">
+                  Linaje:{" "}
+                  {draftLineage.length
+                    ? draftLineage.map((entry) => entry.title).join(" → ")
+                    : "raíz"}{" "}
+                  → esta sesión. Se guarda en este dispositivo; la sincronización entre dispositivos
+                  llega en la etapa 2.
+                </p>
+              </div>
+            ) : null}
+            {newChat.mode === "continuation" ? (
+              <Field
+                label="Objetivo"
+                hint="Se usa para el título y para el traspaso. Cámbialo si el objetivo ya no es el mismo."
+              >
+                <input
+                  className="field"
+                  value={newChat.objective}
+                  onChange={(event) => {
+                    const objective = event.target.value;
+                    setNewChat({
+                      ...newChat,
+                      objective,
+                      title: newChat.titleTouched
+                        ? newChat.title
+                        : titleForHandoff(objective, newChat.generation),
+                    });
+                  }}
+                  placeholder="Objetivo de la sesión"
+                />
+              </Field>
+            ) : null}
             <Field label="Título" hint="Opcional; si lo dejas vacío se usa el primer prompt.">
               <input
                 className="field"
                 value={newChat.title}
-                onChange={(event) => setNewChat({ ...newChat, title: event.target.value })}
+                onChange={(event) =>
+                  setNewChat({ ...newChat, title: event.target.value, titleTouched: true })
+                }
                 placeholder="Nueva sesión"
               />
             </Field>
@@ -1477,23 +1938,29 @@ export function SessionsPage() {
             <Field
               label="Perfil de modelos"
               hint={
-                profileSuggestion.data?.profile
-                  ? `Recomendado para este proyecto: ${profileSuggestion.data.profile.name} (${Math.round(
-                      profileSuggestion.data.confidence * 100,
-                    )} % confianza). Puedes cambiarlo.`
-                  : "Se aplica a los agentes y al modelo de la sesión. Puedes cambiarlo antes de crear."
+                draftRecommendation.source === "prompt" && draftRecommendation.recommended
+                  ? `Sugerido por el pedido: ${draftRecommendation.recommended} (${Math.round(
+                      draftRecommendation.confidence * 100,
+                    )} %). Puedes cambiarlo.`
+                  : profileSuggestion.data?.profile
+                    ? `Recomendado para este proyecto: ${profileSuggestion.data.profile.name} (${Math.round(
+                        profileSuggestion.data.confidence * 100,
+                      )} % confianza). Puedes cambiarlo.`
+                    : "Se aplica a los agentes y al modelo de la sesión. Puedes cambiarlo antes de crear."
               }
             >
               <select
                 className="field"
                 value={newChat.profileId}
-                onChange={(event) => setNewChat({ ...newChat, profileId: event.target.value })}
+                onChange={(event) =>
+                  setNewChat({ ...newChat, profileId: event.target.value, profileTouched: true })
+                }
               >
                 <option value="">Sin perfil (modelo del agente)</option>
                 {(profiles.data?.profiles ?? []).map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
-                    {item.id === profileSuggestion.data?.profile?.id ? " · recomendado" : ""}
+                    {item.id === draftProfile?.id ? " · sugerido" : ""}
                     {item.id === profiles.data?.applied_profile_id ? " · aplicado" : ""}
                   </option>
                 ))}
@@ -1507,11 +1974,40 @@ export function SessionsPage() {
               compact
             />
             <Field
-              label="Primer prompt"
-              hint="Opcional. En una continuación, revisa el resumen antes de enviarlo."
+              label={newChat.mode === "continuation" ? "Traspaso (editable)" : "Primer prompt"}
+              hint={
+                newChat.mode === "continuation"
+                  ? "Revisa el traspaso antes de enviarlo. El primer mensaje pide al asistente confirmar qué entendió."
+                  : "Opcional. Puedes adjuntar archivos."
+              }
             >
+              <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                <span
+                  className={cn(
+                    "text-[10px] tabular-nums",
+                    draftTokens > 6000 ? "text-warning" : "text-faint",
+                  )}
+                >
+                  ~{draftTokens} tokens
+                  {draftTokens > 6000 ? " · supera el presupuesto recomendado (4-6k)" : ""}
+                </span>
+                <button
+                  type="button"
+                  className="ml-auto rounded-md border border-line px-2 py-0.5 text-[10px] text-violet-soft transition-colors hover:bg-violet/10"
+                  onClick={() => setPromptExpanded((value) => !value)}
+                >
+                  {promptExpanded ? "Reducir" : "Ampliar"}
+                </button>
+              </div>
               <textarea
-                className="field min-h-32 resize-y text-xs leading-5"
+                className={cn(
+                  "field resize-y text-xs leading-5",
+                  promptExpanded
+                    ? "min-h-[55vh]"
+                    : newChat.mode === "continuation"
+                      ? "min-h-64"
+                      : "min-h-32",
+                )}
                 value={newChat.prompt}
                 onChange={(event) => setNewChat({ ...newChat, prompt: event.target.value })}
                 onPaste={(event) => {
@@ -1524,6 +2020,71 @@ export function SessionsPage() {
                 placeholder="Escribe el primer mensaje o adjunta archivos…"
               />
             </Field>
+            {newChat.mode === "continuation" ? (
+              <details className="rounded-lg border border-line bg-carbon-900 px-3 py-2 text-[11px] text-muted">
+                <summary className="cursor-pointer text-faint">
+                  Qué se lleva, qué se deja fuera y elementos fijados
+                </summary>
+                <div className="mt-2 space-y-2">
+                  <p>
+                    Se lleva: objetivo, último pedido completo, estado, hecho/pendiente, decisiones,
+                    repo, bugs y restricciones.
+                  </p>
+                  <p>
+                    Se deja fuera:{" "}
+                    {(newChat.handoff?.dropped ?? []).join(" ") ||
+                      "nada relevante; el traspaso está vacío hasta que termine de generarse."}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {(["lastRequest", "decisions", "constraints", "pending"] as HandoffSection[]).map(
+                      (section) => (
+                        <label
+                          key={section}
+                          className="inline-flex items-center gap-1.5 rounded-md border border-line px-2 py-1"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={newChat.handoff?.pinned.includes(section) ?? false}
+                            onChange={() => togglePin(section)}
+                          />
+                          Fijar {HANDOFF_SECTION_LABELS[section]}
+                        </label>
+                      ),
+                    )}
+                  </div>
+                  {existingCheckpoint ? (
+                    <button
+                      type="button"
+                      className="text-[10px] text-violet-soft"
+                      onClick={() =>
+                        setNewChat({
+                          ...newChat,
+                          prompt: existingCheckpoint.text,
+                          objective: existingCheckpoint.objective || newChat.objective,
+                        })
+                      }
+                    >
+                      Usar el checkpoint guardado (
+                      {new Date(existingCheckpoint.createdAt).toLocaleString()})
+                    </button>
+                  ) : null}
+                  {parentSession ? (
+                    <button
+                      type="button"
+                      className="block text-[10px] text-faint underline decoration-line underline-offset-2"
+                      onClick={() =>
+                        setNewChat({
+                          ...newChat,
+                          prompt: buildHandoffPrompt(parentSession, context.data ?? []),
+                        })
+                      }
+                    >
+                      Usar el resumen anterior (método antiguo)
+                    </button>
+                  ) : null}
+                </div>
+              </details>
+            ) : null}
             <div className="flex items-center gap-2">
               <AttachmentButton onAdd={draftAttachments.add} disabled={createChat.isPending} />
               <span className="text-[10px] text-faint">
@@ -1540,6 +2101,41 @@ export function SessionsPage() {
             ) : null}
           </div>
         ) : null}
+      </Modal>
+
+      <Modal
+        open={Boolean(commandPicker)}
+        title={commandPicker?.title ?? "Seleccionar"}
+        onClose={() => setCommandPicker(null)}
+        width="max-w-lg"
+      >
+        <div className="max-h-[60vh] space-y-1 overflow-y-auto">
+          {(commandPicker?.options ?? []).map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className="w-full rounded-md border border-line px-3 py-2 text-left text-xs text-muted transition-colors hover:bg-carbon-900 hover:text-ink"
+              onClick={() => commandPicker?.onPick(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+          {commandPicker && commandPicker.options.length === 0 ? (
+            <p className="text-xs text-faint">Sin opciones disponibles.</p>
+          ) : null}
+        </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(commandPanel)}
+        title={commandPanel?.title ?? "Resultado"}
+        onClose={() => setCommandPanel(null)}
+        width="max-w-2xl"
+        footer={<Button onClick={() => setCommandPanel(null)}>Cerrar</Button>}
+      >
+        <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-line bg-carbon-950 px-3 py-2 text-[11px] leading-5 text-muted">
+          {commandPanel?.body ?? ""}
+        </pre>
       </Modal>
 
       <ConfirmDialog
