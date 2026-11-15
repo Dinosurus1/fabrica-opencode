@@ -69,7 +69,7 @@ npm run test:e2e       # build + Playwright (servidor propio en :4174)
   conservar borrador y adjunto tras recargar, borrar chat y navegación móvil.
 - El E2E usa el Chromium del sistema (`PLAYWRIGHT_CHROMIUM`) y no descarga
   navegadores.
-- Resultado actual: 50 pruebas unitarias/componente y 4 E2E en verde.
+- Resultado actual: 51 pruebas unitarias/componente y 4 E2E en verde.
 
 ## Fase 1 — Móvil, PWA y acceso remoto
 
