@@ -444,6 +444,12 @@ export async function applyProfileFromStore(
 ): Promise<{ warnings: string[]; sessionUpdated: boolean }> {
   const { runtime } = mam;
   const warnings: string[] = [];
+  const updatedModels: Array<{
+    agentId: string;
+    providerId: string;
+    modelId: string;
+    variant: string | null;
+  }> = [];
   if (mam.activeRegistration) {
     await mam.activeRegistration.dispose();
     mam.activeRegistration = null;
@@ -460,9 +466,22 @@ export async function applyProfileFromStore(
         id: assignment.modelId,
         ...(assignment.variant ? { variant: assignment.variant } : {}),
       };
+      updatedModels.push({
+        agentId: assignment.agentId,
+        providerId: assignment.providerId,
+        modelId: assignment.modelId,
+        variant: assignment.variant ?? null,
+      });
     }
   });
   await runtime.agent.reload();
+  // El catálogo persistido alimenta la página de agentes; si no se actualiza,
+  // muestra los modelos anteriores hasta la próxima sincronización manual.
+  await Promise.all(
+    updatedModels.map((item) =>
+      mam.store.setAgentModel(item.agentId, item.providerId, item.modelId, item.variant),
+    ),
+  );
   await mam.store.setAppliedProfile(mam.location, profile.id);
 
   if (options.makeDefault === true) {

@@ -1009,6 +1009,24 @@ export class MamStore {
     return value ?? null;
   }
 
+  /**
+   * Refleja en el catálogo el modelo efectivo de un agente tras aplicar un
+   * perfil. No toca permisos, nombre, rol ni el resto de metadatos.
+   */
+  async setAgentModel(
+    agentId: string,
+    providerId: string,
+    modelId: string,
+    variant?: string | null,
+  ): Promise<void> {
+    await this.query(
+      `UPDATE factory_agent_catalog
+       SET model_provider = $2, model_id = $3, model_variant = $4, updated_at = now()
+       WHERE agent_id = $1`,
+      [agentId, providerId, modelId, variant ?? null],
+    );
+  }
+
   async setAgentSelection(selection: AgentSelection): Promise<void> {
     await this.query(
       `INSERT INTO factory_meta (key, value, updated_at)
