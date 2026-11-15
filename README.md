@@ -258,10 +258,11 @@ Arranque automático (systemd de usuario + apertura al iniciar sesión):
 cat ui/.env.local                   # consulta la contraseña generada
 ```
 
-Es una PWA instalable con pantalla offline. Para acceso desde el móvil, está
-publicada solo en la tailnet en `https://<equipo>.<tailnet>.ts.net:8443/`; el 443
-sigue siendo el Funnel del host principal. Gestión: `./scripts/factory-tailscale.sh
-status|enable|disable`. Ver `docs/factory-console.md`.
+Es una PWA instalable con pantalla offline. Para acceso desde el móvil, se
+publica solo en la tailnet en `https://<equipo>.<tailnet>.ts.net:8443/`; el 443
+sigue siendo el Funnel del host principal. Gestión:
+`./scripts/factory-tailscale.sh status|enable|disable`. Ver
+`docs/factory-console.md`.
 
 Módulos: Overview, Sessions, Work, Agents, Models, Memory, Projects, Skills,
 Analytics y Settings. La UI envía `location[directory]` del proyecto

@@ -69,7 +69,7 @@ npm run test:e2e       # build + Playwright (servidor propio en :4174)
   conservar borrador y adjunto tras recargar, borrar chat y navegación móvil.
 - El E2E usa el Chromium del sistema (`PLAYWRIGHT_CHROMIUM`) y no descarga
   navegadores.
-- Resultado actual: 25 pruebas unitarias/componente y 4 E2E en verde.
+- Resultado actual: 50 pruebas unitarias/componente y 4 E2E en verde.
 
 ## Fase 1 — Móvil, PWA y acceso remoto
 
@@ -91,9 +91,9 @@ npm run test:e2e       # build + Playwright (servidor propio en :4174)
 
 ### Tailscale
 
-La consola escucha solo en `127.0.0.1`. Ya está publicada en la tailnet en
-**https://<equipo>.<tailnet>.ts.net:8443/**; el 443 sigue siendo el Funnel de
-`host principal`.
+La consola escucha solo en `127.0.0.1`. Se publica en la tailnet en
+**https://<equipo>.<tailnet>.ts.net:8443/**; el 443 sigue siendo el Funnel del
+host principal.
 
 ```bash
 # Una vez, para no ejecutar serve como root:
@@ -107,8 +107,8 @@ sudo tailscale set --operator=$USER
 
 ### Acceso desde el móvil
 
-1. Instala Tailscale en el móvil e inicia sesión con la misma cuenta
-   (`tu-cuenta@ejemplo.com`). Deja la VPN conectada.
+1. Instala Tailscale en el móvil e inicia sesión con la misma cuenta de la
+   tailnet. Deja la VPN conectada.
 2. Abre **https://<equipo>.<tailnet>.ts.net:8443/**.
 3. Introduce la contraseña de la consola. En el PC:
    ```bash
@@ -124,7 +124,8 @@ sudo tailscale set --operator=$USER
 5. Si el móvil pierde la VPN, verás la pantalla de «Sin conexión»; reconecta
    Tailscale y reintenta.
 
-La URL solo responde dentro de la tailnet. No se ha tocado el Funnel del host principal.
+La URL solo responde dentro de la tailnet. No se ha tocado el Funnel del host
+principal.
 
 ACL recomendada (ejemplo, adaptar a los tags reales):
 
@@ -142,6 +143,30 @@ ACL recomendada (ejemplo, adaptar a los tags reales):
 
 Si no se usan tags, limita el acceso a los dispositivos del propietario y evita
 `autogroup:internet`. La consola no debe publicarse con Funnel.
+
+## Fase 2 — Estado y tiempo real
+
+- **Streaming incremental**: `session.text.delta` y `session.reasoning.delta` se
+  acumulan en el cliente (`lib/streaming.ts`) y se fusionan con el último
+  contexto por `assistantMessageID` y `ordinal`. Ya no se pide el contexto
+  completo en cada delta; solo al cerrar un bloque y en estados terminales.
+- **Estado por sesión**: `session.status` (`busy`, `retry`, `idle`) actualiza el
+  indicador «Trabajando» sin esperar al polling. `session.idle` y los eventos
+  terminales limpian el estado y refrescan el contexto.
+- **Permisos pendientes**: `permission.asked`/`permission.replied` se muestran
+  en el panel de la sesión, en la lista y en un aviso global del Layout. Se
+  responde con `once`, `always` o `reject` y motivo opcional.
+- **Sincronización entre pestañas**: la sesión abierta y los borradores viajan
+  por `localStorage` (`storage`). No se pisan si el usuario está escribiendo en
+  la pestaña activa.
+- **Reconciliación**: al volver de segundo plano o recuperar la red se
+  refrescan sesiones, sesiones activas, contexto y permisos. Las sesiones
+  borradas en otra pestaña desaparecen de la lista y no dejan buffers de
+  streaming huérfanos.
+- **Envío con reintento manual**: si el prompt falla, el texto y los adjuntos
+  siguen en el compositor y el error queda visible; no hay cola automática.
+- **Adjuntos pendientes** en IndexedDB (7 días) y restauración de scroll por
+  sesión, ya cubiertos en Fase 1.
 
 ## Modelo de amenaza
 
@@ -168,4 +193,5 @@ Si no se usan tags, limita el acceso a los dispositivos del propietario y evita
 - Notificaciones nativas y PWA instalable con prompt (`beforeinstallprompt`) no
   están implementadas.
 - `tailscale serve` requiere `sudo tailscale set --operator=$USER` o ejecutar el
-  comando con `sudo`; no se automatizó para no tocar el Funnel del host principal.
+  comando con `sudo`; no se automatizó para no tocar el Funnel del host
+  principal.
