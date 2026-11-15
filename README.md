@@ -64,11 +64,12 @@ evidencia por criterio.
 ### 1. Copiar la configuración
 
 Si ya tienes `~/.config/opencode`, muévelo a un backup antes de clonar (si solo
-lo copias, el directorio sigue existiendo y `git clone` falla):
+lo copias, el directorio sigue existiendo y `git clone` falla). Sustituye
+`<owner>` por el propietario del repositorio:
 
 ```bash
 mv ~/.config/opencode ~/.config/opencode.backup
-git clone https://github.com/Dinosurus1/fabrica-opencode.git ~/.config/opencode
+git clone https://github.com/<owner>/fabrica-opencode.git ~/.config/opencode
 ```
 
 Si prefieres otro directorio, usa `OPENCODE_CONFIG_DIR` o copia los archivos a
@@ -78,7 +79,7 @@ Para probar sin tocar tu configuración actual, clona en una carpeta temporal y
 arranca con esa configuración y una base de prueba:
 
 ```bash
-git clone https://github.com/Dinosurus1/fabrica-opencode.git /tmp/fabrica-opencode
+git clone https://github.com/<owner>/fabrica-opencode.git /tmp/fabrica-opencode
 cd /tmp/fabrica-opencode
 cp opencode.example.json opencode.json
 OPENCODE_CONFIG_DIR=/tmp/fabrica-opencode \

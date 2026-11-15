@@ -69,7 +69,7 @@ eliminó al terminar. No se modificó el código de la fábrica para aprobar nad
 
 Evidencia:
 
-- worktree: `/home/dani/.local/share/opencode/worktree/8a95f2/stage-d-scope`
+- worktree: `~/.local/share/opencode/worktree/8a95f2/stage-d-scope`
   (ruta antigua; la convención nueva es
   `~/.local/share/opencode/worktrees/<proyecto>/`)
 - rama: `factory/stage-d-scope`
@@ -166,7 +166,7 @@ propio en `plan_reviews`.
 - `docs/fases.md` y `docs/edge-cases.md` quedan en el proyecto sintético como
   evidencia del alcance.
 - El repo reconstruido se clonó en
-  `/home/dani/.local/share/opencode/fabrica-v2-synth` para que no se pierda al
+  `~/.local/share/opencode/fabrica-v2-synth` para que no se pierda al
   limpiar `/tmp`. El plan `5a...` se reasoció al `project_id` del repo
   reconstruido (`b5417229...`) solo para este anexo.
 
@@ -262,7 +262,7 @@ También se verificó:
   `~/.local/share/opencode/worktrees/fabrica-v2-synth/plan-...`.
 - `subtask_run` detectó y commiteó una edición de un archivo tracked
   (`README.md`), no solo archivos nuevos.
-- Un worktree fuera de la raíz (`/home/dani/malicious-worktree`) fue rechazado.
+- Un worktree fuera de la raíz (`~/malicious-worktree`) fue rechazado.
 - Un cambio fuera de `files_owned` no dejó commit contaminado en la rama; el
   segundo intento escaló y el historial siguió con solo el commit de setup.
 - `factory_doctor` detectó un `.git` roto (`worktrees:rotos`) y un directorio

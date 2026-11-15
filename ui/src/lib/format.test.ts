@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
 import {
   cn,
@@ -29,7 +30,7 @@ describe("format", () => {
   });
 
   it("acorta rutas del home y etiqueta modelos", () => {
-    expect(shortPath("/home/dani/.config/opencode")).toBe("~/.config/opencode");
+    expect(shortPath(`${homedir()}/.config/opencode`)).toBe("~/.config/opencode");
     expect(shortPath(null)).toBe("—");
     expect(modelLabel("opencode-go", "deepseek-v4.1-flash")).toBe(
       "opencode-go/deepseek-v4.1-flash",
