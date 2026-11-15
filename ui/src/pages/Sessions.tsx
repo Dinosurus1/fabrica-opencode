@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowRight,
   CircleStop,
+  GitBranch,
   MessageSquarePlus,
   MessagesSquare,
   Plus,
@@ -46,6 +47,7 @@ import {
 } from "../lib/handoff";
 import {
   baseTitle,
+  childrenOf,
   ensureRoot,
   generationForChild,
   lineageChain,
@@ -1314,8 +1316,27 @@ export function SessionsPage() {
     : null;
   const existingCheckpoint = newChat?.parentId ? readCheckpoint(newChat.parentId) : null;
 
-  const togglePin = (section: HandoffSection) => {
-    setNewChat((current) => {
+  const lineageBody = (sessionId: string) => {
+    const chain = lineageChain(sessionId);
+    const children = childrenOf(sessionId);
+    if (chain.length === 0) {
+      return "Sin linaje registrado en este dispositivo. Se creará al usar /continue o /checkpoint.";
+    }
+    const lines = [
+      "Cadena raíz → esta sesión:",
+      ...chain.map((entry) => `- ${entry.title} (parte ${entry.generation + 1})`),
+    ];
+    if (children.length > 0) {
+      lines.push("", "Hijas directas:", ...children.map((entry) => `- ${entry.title} (parte ${entry.generation + 1})`));
+    }
+    lines.push(
+      "",
+      "El linaje se guarda en localStorage; no se sincroniza entre dispositivos hasta la etapa 2.",
+    );
+    return lines.join("\n");
+  };
+
+  const togglePin = (section: HandoffSection) => {    setNewChat((current) => {
       if (!current) return current;
       const pinned = current.handoff?.pinned ?? [];
       const nextPinned = pinned.includes(section)
@@ -1475,6 +1496,18 @@ export function SessionsPage() {
                   title="Nuevo chat"
                 >
                   <Plus size={15} />
+                </button>
+                <button
+                  className="grid size-8 place-items-center rounded-lg border border-line bg-carbon-900 text-muted transition-colors hover:text-ink"
+                  onClick={() =>
+                    setCommandPanel({
+                      title: "Linaje de sesiones",
+                      body: lineageBody(selected.id),
+                    })
+                  }
+                  title="Linaje de sesiones"
+                >
+                  <GitBranch size={14} />
                 </button>
                 <button
                   className="grid size-8 place-items-center rounded-lg border border-line bg-carbon-900 text-muted transition-colors hover:border-danger/40 hover:text-danger"
