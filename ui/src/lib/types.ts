@@ -120,6 +120,26 @@ export interface Profile {
   applied?: boolean;
 }
 
+export interface ProfileRecommendation {
+  recommended: string;
+  confidence: number;
+  scores: Record<string, number>;
+  reasons: string[];
+  alternatives: Array<{ name: string; score: number }>;
+  profile: { id: string; name: string } | null;
+  available?: Array<{ id: string; name: string }>;
+  signals?: {
+    files?: number;
+    codeFiles?: number;
+    docFiles?: number;
+    testFiles?: number;
+    shellFiles?: number;
+    monorepo?: boolean;
+    linuxSignals?: string[];
+    studySignals?: string[];
+  };
+}
+
 export interface Health {
   ok: boolean;
   project_id: string;

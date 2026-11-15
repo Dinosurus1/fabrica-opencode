@@ -39,7 +39,7 @@ Fábrica de software genérica para OpenCode V2. Instalación global en `~/.conf
 | `git_commit` | Stagea y commitea solo en rama no protegida; único camino permitido. |
 | `quality_policy_set` | Cambia la política de compuertas; exige `confirmed=true`. |
 | `model_catalog_sync` / `model_catalog_list` / `agent_catalog_list` | Catálogo MAM de modelos y agentes. |
-| `model_profile_*` / `mam_status` | Perfiles de ejecución, asignación de modelo por rol, validación, aplicación y resumen. |
+| `model_profile_*` / `model_profile_recommend` / `mam_status` | Perfiles de ejecución, asignación de modelo por rol, validación, aplicación, recomendación determinística por proyecto y resumen. |
 | `factory_agents_*` | Selección de agentes por proyecto, recomendación determinística y permisos `subagent` de la sesión. |
 | `budget_list` / `budget_set` | Presupuesto global, de fase y de tarea. |
 | `executions_list` / `model_history` | Execution log y evaluación de modelos por éxito/coste. |
@@ -59,6 +59,28 @@ web: `health`, `models.*`, `agents.list`, `profiles.*`, `work.*`, `memory.*` y
 `analytics.summary`, `budgets.*`, `executions.list`, `models.history` y
 `agents.*`. Las mutaciones de perfiles/presupuestos exigen `confirmed=true` y se
 auditan; el perfil aplicado se guarda por location y se restaura al recargar.
+
+## Perfiles predeterminados
+
+`seedBuiltinProfiles()` crea los que falten (sin pisar ediciones ni aplicarlos):
+
+- **Programación básica** — scripts, ejercicios y cambios pequeños.
+- **Proyecto grande** — monorepos y arquitectura amplia; híbrido con modelos
+  de coding fuertes y lista de modelos permitidos.
+- **Proyectos pequeños y medianos** — equilibrio entre calidad y coste.
+- **Preguntas básicas** — modelos gratuitos para dudas y resúmenes.
+- **Linux** — shell, systemd, contenedores y depuración.
+- **Estudiar** — razonamiento largo y contexto amplio.
+
+`model_profile_recommend` (y `profiles.recommend` en la UI) lee una muestra
+acotada del proyecto y sugiere uno de estos perfiles; no lo aplica. La consola
+lo muestra con motivos y permite seleccionarlo para revisarlo antes de aplicar.
+
+Los `max_cost_usd` y `token_budget` de cada asignación se usan en las
+ejecuciones de fábrica (`subtask_run`, `review_run`) como límite de la
+asignación y se comparan al cerrar la ejecución; un chat normal de OpenCode no
+consume esos límites. Editar un perfil que estaba aplicado lo desmarca: hay que
+volver a aplicarlo para que los agentes usen las nuevas asignaciones.
 
 ## Skills
 

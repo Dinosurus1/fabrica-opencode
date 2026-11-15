@@ -987,6 +987,10 @@ export class MamStore {
     );
   }
 
+  async clearAppliedProfile(location: string): Promise<void> {
+    await this.query(`DELETE FROM factory_meta WHERE key = $1`, [`applied_profile:${location}`]);
+  }
+
   async getAppliedProfile(location: string): Promise<string | null> {
     const result = await this.query<{ value: unknown }>(
       `SELECT value FROM factory_meta WHERE key = $1`,

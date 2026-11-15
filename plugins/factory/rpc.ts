@@ -38,6 +38,14 @@ export const FactoryRpc = Rpc.define({
       input: { type: "object", properties: {}, additionalProperties: false },
       output: anyObject,
     },
+    "profiles.recommend": {
+      input: {
+        type: "object",
+        properties: { project_id: { type: "string" }, directory: { type: "string" } },
+        additionalProperties: false,
+      },
+      output: anyObject,
+    },
     "profiles.get": {
       input: {
         type: "object",

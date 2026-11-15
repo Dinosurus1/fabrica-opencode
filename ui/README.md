@@ -63,7 +63,7 @@ No publiques la consola en `0.0.0.0` sin poner delante autenticación y TLS.
 | `/sessions` | Sesiones raíz relevantes (sin subagentes ni temporales por defecto) con lista agrupada y búsqueda. Crear, abrir, eliminar (con confirmación), cambiar agente/modelo, enviar prompts con adjuntos (imágenes, PDFs y documentos), interrumpir, seguir la conversación en tiempo real por SSE y aviso de sesión larga con traspaso a una sesión nueva. Conserva el borrador y los adjuntos pendientes de cada conversación, y restaura la última sesión y los filtros al recargar. |
 | `/work` | Tareas, planes, gates, revisiones, presupuesto global y execution log. |
 | `/agents` | Selección de agentes por proyecto, modo manual/híbrido/auto y modelo activo. |
-| `/models` | Catálogo real, perfiles, política y asignación de modelo/presupuesto por rol. |
+| `/models` | Catálogo real, perfiles (incluidos los predeterminados), recomendación de perfil por proyecto, política y asignación de modelo/presupuesto por rol. |
 | `/memory` | Memoria vectorial: auditoría, búsqueda textual, metadatos, borrado y consolidación dry-run con backup, aprobación, soft delete y verificación. |
 | `/projects` | Proyectos conocidos por OpenCode. |
 | `/skills` | Skills disponibles y su origen. |

@@ -24,6 +24,7 @@ import {
   validateProfileInput,
   type MamRuntime,
 } from "../../tools/factory/mam.js";
+import { recommendProfile } from "../../tools/factory/profile-recommend.js";
 
 export interface FactoryRpcDeps {
   mam: MamRuntime;
@@ -197,12 +198,13 @@ export function createFactoryRpcHandlers(deps: FactoryRpcDeps) {
     },
 
     async "models.sync"() {
-      const { counts, defaultProfile } = await syncCatalogFromRuntime(mam);
+      const { counts, defaultProfile, seededProfiles } = await syncCatalogFromRuntime(mam);
       return {
         synced: counts,
         default_profile: defaultProfile
           ? { id: defaultProfile.id, name: defaultProfile.name, assignments: defaultProfile.assignments.length }
           : null,
+        seeded_profiles: seededProfiles,
       };
     },
 
@@ -217,6 +219,34 @@ export function createFactoryRpcHandlers(deps: FactoryRpcDeps) {
         mam.store.getAppliedProfile(mam.location),
       ]);
       return { count: profiles.length, profiles, applied_profile_id: applied };
+    },
+
+    async "profiles.recommend"(input: Record<string, unknown>) {
+      let root = mam.location;
+      const projectId = asString(input.project_id);
+      if (projectId) {
+        const project = await query<{ path: string }>(
+          `SELECT path FROM factory_projects WHERE project_id = $1`,
+          [projectId],
+        );
+        if (project.rows[0]?.path) root = project.rows[0].path;
+      }
+      const directory = asString(input.directory);
+      if (directory && (root === mam.location || !projectId)) {
+        const project = await query<{ path: string }>(
+          `SELECT path FROM factory_projects WHERE path = $1`,
+          [directory],
+        );
+        if (project.rows[0]?.path) root = project.rows[0].path;
+      }
+      const recommendation = await recommendProfile(root);
+      const profiles = await mam.store.listProfiles();
+      const match = profiles.find((profile) => profile.name === recommendation.recommended);
+      return {
+        ...recommendation,
+        profile: match ? { id: match.id, name: match.name } : null,
+        available: profiles.map((profile) => ({ id: profile.id, name: profile.name })),
+      };
     },
 
     async "profiles.get"(input: Record<string, unknown>) {
@@ -246,7 +276,14 @@ export function createFactoryRpcHandlers(deps: FactoryRpcDeps) {
         assignments: saved.assignments.length,
         isDefault: saved.isDefault,
       });
-      return { saved: true, profile: saved, issues };
+      let unapplied = false;
+      const applied = await mam.store.getAppliedProfile(mam.location);
+      if (applied === saved.id) {
+        await mam.store.clearAppliedProfile(mam.location);
+        await mam.store.audit("profile.unapply", saved.id, { reason: "updated" });
+        unapplied = true;
+      }
+      return { saved: true, profile: saved, issues, unapplied };
     },
 
     async "profiles.apply"(input: Record<string, unknown>) {

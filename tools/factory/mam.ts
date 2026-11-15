@@ -21,6 +21,8 @@ import type {
   ProfileMode,
   ProfilePolicy,
 } from "./mam-db.js";
+import { BUILTIN_PROFILES } from "./profile-templates.js";
+import { recommendProfile } from "./profile-recommend.js";
 import { fail, ok, type ToolDef } from "./types.js";
 
 export interface MamRuntime {
@@ -377,9 +379,47 @@ export async function validateProfileInput(
   return issues;
 }
 
+export interface SeedProfilesResult {
+  created: string[];
+  existing: string[];
+  invalid: Array<{ name: string; issues: string[] }>;
+}
+
+/**
+ * Crea los perfiles predeterminados que falten. No los aplica y no modifica los
+ * que ya existen con el mismo nombre: el usuario manda sobre sus ediciones.
+ */
+export async function seedBuiltinProfiles(store: MamStore): Promise<SeedProfilesResult> {
+  const existing = new Set((await store.listProfiles()).map((profile) => profile.name));
+  const result: SeedProfilesResult = { created: [], existing: [], invalid: [] };
+
+  for (const template of BUILTIN_PROFILES) {
+    if (existing.has(template.name)) {
+      result.existing.push(template.name);
+      continue;
+    }
+    const issues = await validateProfileInput(store, template);
+    const errors = issues.filter((issue) => issue.severity === "error");
+    if (errors.length > 0) {
+      result.invalid.push({ name: template.name, issues: errors.map((issue) => issue.message) });
+      continue;
+    }
+    const saved = await store.upsertProfile(template);
+    await store.audit("profile.seed", saved.id, {
+      name: saved.name,
+      assignments: saved.assignments.length,
+    });
+    result.created.push(saved.name);
+    existing.add(saved.name);
+  }
+
+  return result;
+}
+
 export async function syncCatalogFromRuntime(mam: MamRuntime): Promise<{
   counts: { models: number; agents: number };
   defaultProfile: ExecutionProfileWithAssignments | null;
+  seededProfiles: SeedProfilesResult;
 }> {
   const models = listFrom(await mam.runtime.model.list()).map(toModelInput);
   const agents = listFrom(await mam.runtime.agent.list()).map(toAgentInput);
@@ -387,8 +427,9 @@ export async function syncCatalogFromRuntime(mam: MamRuntime): Promise<{
   const validAgents = agents.filter((agent) => agent.agentId);
   const counts = await mam.store.syncCatalog(validModels, validAgents);
   const defaultProfile = await mam.store.ensureDefaultProfile();
+  const seededProfiles = await seedBuiltinProfiles(mam.store);
   await mam.store.audit("catalog.sync", null, counts);
-  return { counts, defaultProfile };
+  return { counts, defaultProfile, seededProfiles };
 }
 
 export interface ApplyProfileOptions {
@@ -456,16 +497,17 @@ export function createMamTools(deps: MamToolsDeps): ToolDef[] {
     {
       name: "model_catalog_sync",
       description:
-        "Sincroniza el catálogo real de modelos y agentes de OpenCode en la fábrica. Crea el perfil 'Actual' si no hay uno por defecto. No cambia modelos.",
+        "Sincroniza el catálogo real de modelos y agentes y crea los perfiles predeterminados que falten. Crea el perfil 'Actual' si no hay uno por defecto. No cambia modelos aplicados.",
       input: { type: "object", properties: {}, additionalProperties: false },
       async execute() {
         try {
-          const { counts, defaultProfile } = await syncCatalogFromRuntime(deps.mam);
+          const { counts, defaultProfile, seededProfiles } = await syncCatalogFromRuntime(deps.mam);
           return ok({
             synced: counts,
             default_profile: defaultProfile
               ? { id: defaultProfile.id, name: defaultProfile.name, assignments: defaultProfile.assignments.length }
               : null,
+            seeded_profiles: seededProfiles,
           });
         } catch (error) {
           return fail(error instanceof Error ? error.message : String(error));
@@ -531,6 +573,26 @@ export function createMamTools(deps: MamToolsDeps): ToolDef[] {
             store.getAppliedProfile(deps.mam.location),
           ]);
           return ok({ count: profiles.length, profiles, applied_profile_id: applied });
+        } catch (error) {
+          return fail(error instanceof Error ? error.message : String(error));
+        }
+      },
+    },
+    {
+      name: "model_profile_recommend",
+      description:
+        "Analiza el proyecto actual y recomienda un perfil predeterminado según sus señales. No aplica cambios.",
+      input: { type: "object", properties: {}, additionalProperties: false },
+      async execute() {
+        try {
+          const recommendation = await recommendProfile(deps.mam.location);
+          const profiles = await store.listProfiles();
+          const match = profiles.find((profile) => profile.name === recommendation.recommended);
+          return ok({
+            ...recommendation,
+            profile: match ? { id: match.id, name: match.name } : null,
+            available: profiles.map((profile) => ({ id: profile.id, name: profile.name })),
+          });
         } catch (error) {
           return fail(error instanceof Error ? error.message : String(error));
         }
@@ -639,7 +701,16 @@ export function createMamTools(deps: MamToolsDeps): ToolDef[] {
             assignments: saved.assignments.length,
             isDefault: saved.isDefault,
           });
-          return ok({ saved: true, profile: saved, issues });
+          // Editar el perfil aplicado deja de garantizar que los agentes usen
+          // esas asignaciones: se invalida la marca para no mentir en la UI.
+          let unapplied = false;
+          const applied = await store.getAppliedProfile(deps.mam.location);
+          if (applied === saved.id) {
+            await store.clearAppliedProfile(deps.mam.location);
+            await store.audit("profile.unapply", saved.id, { reason: "updated" });
+            unapplied = true;
+          }
+          return ok({ saved: true, profile: saved, issues, unapplied });
         } catch (error) {
           return fail(error instanceof Error ? error.message : String(error));
         }

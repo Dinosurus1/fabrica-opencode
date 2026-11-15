@@ -21,7 +21,12 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createFactoryDb, type QueryFn } from "../../tools/factory/db.js";
 import { createFactoryTools } from "../../tools/factory/index.js";
-import { applyProfileFromStore, createMamRuntime, validateProfileInput } from "../../tools/factory/mam.js";
+import {
+  applyProfileFromStore,
+  createMamRuntime,
+  seedBuiltinProfiles,
+  validateProfileInput,
+} from "../../tools/factory/mam.js";
 import { createMamStore } from "../../tools/factory/mam-db.js";
 import { createPlanStore } from "../../tools/factory/plan-db.js";
 import { createMemoryBridge } from "./memory-bridge.js";
@@ -257,6 +262,24 @@ export default Plugin.define({
     // asignación de modelos vive en memoria; el ID aplicado se persiste por
     // location para que el estado sobreviva al ciclo de vida del plugin.
     void (async () => {
+      try {
+        const seeded = await seedBuiltinProfiles(mamStore);
+        if (seeded.created.length > 0) {
+          log(`perfiles predeterminados creados: ${seeded.created.join(", ")}`);
+        }
+        if (seeded.invalid.length > 0) {
+          log(
+            `perfiles predeterminados omitidos por catálogo incompleto: ${seeded.invalid
+              .map((item) => item.name)
+              .join(", ")}`,
+          );
+        }
+      } catch (error) {
+        log(
+          "no se pudieron sembrar los perfiles predeterminados:",
+          redact(error instanceof Error ? error.message : String(error)),
+        );
+      }
       try {
         const appliedId = await mamStore.getAppliedProfile(ctx.location.directory);
         if (!appliedId) return;

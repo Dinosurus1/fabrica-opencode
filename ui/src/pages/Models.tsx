@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, Cpu, Plus, RefreshCw, Save, Trash2, Wand2 } from "lucide-react";
+import { Copy, Cpu, Plus, RefreshCw, Save, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useProject } from "../components/ProjectContext";
 import {
@@ -16,7 +16,13 @@ import {
 } from "../components/ui";
 import { cn, formatCompact, formatUsd } from "../lib/format";
 import { rpc } from "../lib/rpc";
-import type { CatalogAgent, CatalogModel, Profile, ProfileAssignment } from "../lib/types";
+import type {
+  CatalogAgent,
+  CatalogModel,
+  Profile,
+  ProfileAssignment,
+  ProfileRecommendation,
+} from "../lib/types";
 
 interface AssignmentDraft {
   providerId: string;
@@ -209,15 +215,30 @@ export function ModelsPage() {
   }, [profile.data, name, description, mode, draft, effectivePolicy]);
 
   const sync = useMutation({
-    mutationFn: () => rpc<{ synced: { models: number; agents: number } }>("models.sync", {}, directory),
+    mutationFn: () =>
+      rpc<{
+        synced: { models: number; agents: number };
+        seeded_profiles?: { created: string[]; existing: string[]; invalid: unknown[] };
+      }>("models.sync", {}, directory),
     onSuccess: async (result) => {
-      setNotice(`Catálogo sincronizado: ${result.synced.models} modelos, ${result.synced.agents} agentes.`);
+      const created = result.seeded_profiles?.created.length ?? 0;
+      setNotice(
+        `Catálogo sincronizado: ${result.synced.models} modelos, ${result.synced.agents} agentes.${
+          created > 0 ? ` ${created} perfiles predeterminados creados.` : ""
+        }`,
+      );
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["factory", "models"] }),
         queryClient.invalidateQueries({ queryKey: ["factory", "agents"] }),
         queryClient.invalidateQueries({ queryKey: ["factory", "profiles"] }),
       ]);
     },
+  });
+
+  const recommend = useMutation({
+    mutationFn: () =>
+      rpc<ProfileRecommendation>("profiles.recommend", { project_id: projectId, directory }, directory),
+    onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
   });
 
   const save = useMutation({
@@ -231,7 +252,11 @@ export function ModelsPage() {
         maxCostUsd: assignment.maxCostUsd,
         tokenBudget: assignment.tokenBudget,
       }));
-      return rpc<{ saved: boolean; issues?: Array<{ message: string; severity: string }> }>("profiles.upsert", {
+      return rpc<{
+        saved: boolean;
+        issues?: Array<{ message: string; severity: string }>;
+        unapplied?: boolean;
+      }>("profiles.upsert", {
         id: profile.data.id,
         name,
         description,
@@ -246,7 +271,11 @@ export function ModelsPage() {
         setNotice(result.issues?.map((issue) => issue.message).join(" · ") ?? "El perfil no es válido.");
         return;
       }
-      setNotice("Perfil guardado.");
+      setNotice(
+        result.unapplied
+          ? "Perfil guardado. Estaba aplicado, así que vuelve a aplicarlo para que los agentes usen los cambios."
+          : "Perfil guardado.",
+      );
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["factory", "profiles"] }),
         queryClient.invalidateQueries({ queryKey: ["factory", "profile", selectedProfileId] }),
@@ -355,6 +384,15 @@ export function ModelsPage() {
         subtitle="Catálogo real de OpenCode, perfiles de ejecución y asignación de modelo por rol. El modelo se bloquea por agente; no hay sustitución silenciosa."
         actions={
           <>
+            <Button
+              variant="ghost"
+              onClick={() => recommend.mutate()}
+              disabled={recommend.isPending}
+              title="Analiza el proyecto y sugiere un perfil sin aplicarlo"
+            >
+              <Sparkles size={14} className={recommend.isPending ? "animate-pulse" : undefined} />
+              Detectar perfil
+            </Button>
             <Button onClick={() => sync.mutate()} disabled={sync.isPending}>
               <RefreshCw size={14} className={sync.isPending ? "animate-spin" : undefined} />
               Sincronizar catálogo
@@ -373,6 +411,59 @@ export function ModelsPage() {
       ) : null}
 
       {error ? <ErrorState error={error} onRetry={() => void models.refetch()} /> : null}
+
+      {recommend.data ? (
+        <div className="surface border-violet/30 bg-violet/[0.06] px-4 py-3">
+          <div className="flex flex-wrap items-start gap-3">
+            <div className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg border border-violet/30 bg-violet/10 text-violet-soft">
+              <Sparkles size={15} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-xs font-medium text-ink">
+                  Perfil recomendado: {recommend.data.profile?.name ?? recommend.data.recommended}
+                </p>
+                <Badge tone="violet">
+                  {Math.round(recommend.data.confidence * 100)}% confianza
+                </Badge>
+                <span className="text-[10px] text-faint">
+                  {recommend.data.signals?.codeFiles ?? 0} archivos de código ·{" "}
+                  {recommend.data.signals?.docFiles ?? 0} documentos
+                </span>
+              </div>
+              <p className="mt-1 text-[11px] leading-5 text-muted">
+                {recommend.data.reasons.length > 0
+                  ? recommend.data.reasons.join(" · ")
+                  : "Sin señales fuertes; se sugiere el perfil más barato."}
+              </p>
+              {recommend.data.alternatives.length > 0 ? (
+                <p className="mt-1 text-[10px] text-faint">
+                  Alternativas:{" "}
+                  {recommend.data.alternatives
+                    .map((item) => `${item.name} (${item.score.toFixed(1)})`)
+                    .join(" · ")}
+                </p>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {recommend.data.profile ? (
+                <Button
+                  className="h-8 px-2.5 text-xs"
+                  onClick={() => {
+                    setSelectedProfileId(recommend.data!.profile!.id);
+                    setNotice(`Perfil seleccionado: ${recommend.data!.profile!.name}. Revísalo y pulsa Aplicar.`);
+                  }}
+                >
+                  Ver perfil
+                </Button>
+              ) : null}
+              <Button variant="ghost" onClick={() => recommend.reset()}>
+                Cerrar
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
         <Section
