@@ -58,6 +58,7 @@ const SESSION_EVENT_TYPES = [
   "permission.replied",
   "form.created",
   "form.replied",
+  "form.cancelled",
 ];
 
 const RECONNECT_DELAYS = [1_000, 2_000, 4_000, 8_000, 15_000];

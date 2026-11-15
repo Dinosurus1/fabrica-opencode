@@ -146,6 +146,11 @@ Factory Console (React/Vite)
   `POST /api/session/:id/permission/:requestId/reply` (`once`, `always`,
   `reject` + motivo opcional). Mientras no se responde, OpenCode mantiene la
   herramienta en pausa y la sesión figura como «running».
+- Los formularios llegan por `form.created` y se responden con
+  `POST /api/session/:id/form/:formID/reply` (`answer`), o se cancelan con
+  `DELETE`. Soportan campos string, number, integer, boolean y multiselect.
+- El E2E de red corta 10 s con SSE simulado y verifica que no se duplican ni
+  pierden mensajes al reconectar.
 - El compositor admite comandos de barra (`/models`, `/agent`, `/status`,
   `/continue`, `/checkpoint`, `/cd`, `/help`). Se ejecutan en el cliente; `/status`
   lee `GET /api/repo/status` (git de solo lectura) y nunca pregunta al modelo.

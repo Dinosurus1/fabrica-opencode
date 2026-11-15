@@ -54,6 +54,38 @@ export interface Session {
 
 export type PermissionDecision = "once" | "always" | "reject";
 
+/** Campo de un formulario de OpenCode (`form.*`). */
+export interface FormField {
+  key: string;
+  title?: string;
+  description?: string;
+  required?: boolean;
+  hidden?: boolean;
+  type: "string" | "number" | "integer" | "boolean" | "multiselect";
+  format?: "email" | "uri" | "date" | "date-time";
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+  placeholder?: string;
+  default?: string | number | boolean | string[];
+  minimum?: number;
+  maximum?: number;
+  options?: Array<{ value: string; label: string; description?: string }>;
+  custom?: boolean;
+  when?: Array<{ key: string; op: "eq" | "neq"; value: string | number | boolean }>;
+}
+
+export type FormAnswer = Record<string, string | number | boolean | string[]>;
+
+export interface FormRequest {
+  id: string;
+  sessionID: string;
+  title: string;
+  metadata?: Record<string, unknown>;
+  fields: FormField[];
+}
+
+
 /**
  * Solicitud de permiso de OpenCode V2 (`permission.asked`).
  * `resources` son los comandos/rutas afectados y `save` las reglas que se

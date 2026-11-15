@@ -25,6 +25,7 @@ import {
 } from "../components/sessions/attachments";
 import { SessionList } from "../components/sessions/SessionList";
 import { CommandMenu } from "../components/sessions/CommandMenu";
+import { FormsPanel, type FormReplyState } from "../components/sessions/Forms";
 import { PermissionsPanel } from "../components/sessions/Permissions";
 import { messageText, Transcript } from "../components/sessions/Transcript";
 import { useProject } from "../components/ProjectContext";
@@ -71,6 +72,8 @@ import {
 } from "../lib/streaming";
 import type {
   CatalogModel,
+  FormAnswer,
+  FormRequest,
   PermissionDecision,
   PermissionRequest,
   Profile,
@@ -407,11 +410,36 @@ export function SessionsPage() {
   );
   const waitingPermission = pendingPermissions.length > 0;
 
+  const forms = useQuery({
+    queryKey: ["opencode", "session-forms", selectedId],
+    queryFn: () => api.sessionForms(selectedId!),
+    enabled: Boolean(selectedId),
+    refetchInterval: 10_000,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+  });
+
+  const projectForms = useQuery({
+    queryKey: ["opencode", "form-requests", directory ?? "default"],
+    queryFn: () => api.forms(directory),
+    enabled: Boolean(directory),
+    refetchInterval: 20_000,
+    refetchOnWindowFocus: true,
+    staleTime: 5_000,
+  });
+
+  const pendingForms = useMemo(() => forms.data ?? [], [forms.data]);
+  const waitingForm = pendingForms.length > 0;
+  const waitingApproval = waitingPermission || waitingForm;
+
   const attentionIds = useMemo(() => {
     let state = seedPermissions(permissionEvents, projectPermissions.data);
     if (selectedId) state = replaceSessionPermissions(state, selectedId, permissions.data);
-    return new Set(Object.keys(state));
-  }, [permissionEvents, projectPermissions.data, permissions.data, selectedId]);
+    const next = new Set(Object.keys(state));
+    for (const form of projectForms.data ?? []) next.add(form.sessionID);
+    if (selectedId && pendingForms.length > 0) next.add(selectedId);
+    return next;
+  }, [permissionEvents, projectPermissions.data, permissions.data, selectedId, projectForms.data, pendingForms.length]);
 
   const invalidateSessions = (delay = 400) => {
     if (listTimer.current) clearTimeout(listTimer.current);
@@ -453,6 +481,16 @@ export function SessionsPage() {
     }
 
     if (event.type.startsWith("session.") && !streaming) invalidateSessions(600);
+
+    if (event.type === "form.created" || event.type === "form.replied" || event.type === "form.cancelled") {
+      const target = typeof event.data?.sessionID === "string" ? event.data.sessionID : undefined;
+      if (target) {
+        void queryClient.invalidateQueries({ queryKey: ["opencode", "session-forms", target] });
+        if (target === selectedRef.current) invalidateContext(1_200);
+      }
+      void queryClient.invalidateQueries({ queryKey: ["opencode", "form-requests"] });
+      return;
+    }
 
     if (event.type === "permission.asked" || event.type === "permission.replied") {
       setPermissionEvents((current) => applyPermissionEvent(current, event));
@@ -847,6 +885,33 @@ export function SessionsPage() {
         queryKey: ["opencode", "session-permissions", request.sessionID],
       });
       void queryClient.invalidateQueries({ queryKey: ["opencode", "permission-requests"] });
+      invalidateContext(200);
+      invalidateSessions(0);
+    },
+    onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
+  });
+
+  const replyForm = useMutation({
+    mutationFn: ({ form, answer }: { form: FormRequest; answer: FormAnswer }) =>
+      api.replyForm(form.sessionID, form.id, answer),
+    onSuccess: (_result, { form }) => {
+      void queryClient.invalidateQueries({
+        queryKey: ["opencode", "session-forms", form.sessionID],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["opencode", "form-requests"] });
+      invalidateContext(200);
+      invalidateSessions(0);
+    },
+    onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
+  });
+
+  const cancelForm = useMutation({
+    mutationFn: (form: FormRequest) => api.cancelForm(form.sessionID, form.id),
+    onSuccess: (_result, form) => {
+      void queryClient.invalidateQueries({
+        queryKey: ["opencode", "session-forms", form.sessionID],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["opencode", "form-requests"] });
       invalidateContext(200);
       invalidateSessions(0);
     },
@@ -1315,6 +1380,12 @@ export function SessionsPage() {
     ? sessions.data?.find((session) => session.id === newChat.parentId) ?? null
     : null;
   const existingCheckpoint = newChat?.parentId ? readCheckpoint(newChat.parentId) : null;
+  const pendingFormReply: FormReplyState | null =
+    replyForm.isPending && replyForm.variables
+      ? { formId: replyForm.variables.form.id, action: "reply" }
+      : cancelForm.isPending && cancelForm.variables
+        ? { formId: cancelForm.variables.id, action: "cancel" }
+        : null;
 
   const lineageBody = (sessionId: string) => {
     const chain = lineageChain(sessionId);
@@ -1434,7 +1505,7 @@ export function SessionsPage() {
                   <span
                     className={cn(
                       "ml-1 inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium",
-                      waitingPermission
+                      waitingApproval
                         ? "border-warning/40 bg-warning/10 text-warning"
                         : liveTone === "live"
                           ? "border-success/25 bg-success/10 text-success"
@@ -1446,7 +1517,7 @@ export function SessionsPage() {
                     <span
                       className={cn(
                         "size-1.5 rounded-full",
-                        waitingPermission
+                        waitingApproval
                           ? "animate-pulse bg-warning"
                           : liveTone === "live"
                             ? "bg-success"
@@ -1455,8 +1526,12 @@ export function SessionsPage() {
                               : "bg-danger",
                       )}
                     />
-                    {waitingPermission
-                      ? `Esperando aprobación${pendingPermissions.length > 1 ? ` (${pendingPermissions.length})` : ""}`
+                    {waitingApproval
+                      ? `Esperando tu intervención${
+                          pendingPermissions.length + pendingForms.length > 1
+                            ? ` (${pendingPermissions.length + pendingForms.length})`
+                            : ""
+                        }`
                       : running
                         ? "Trabajando"
                         : liveLabel}
@@ -1661,6 +1736,14 @@ export function SessionsPage() {
               </div>
             ) : null}
 
+            <FormsPanel
+              forms={pendingForms}
+              pending={pendingFormReply}
+              error={replyForm.error ?? cancelForm.error}
+              onReply={(form, answer) => replyForm.mutate({ form, answer })}
+              onCancel={(form) => cancelForm.mutate(form)}
+            />
+
             <PermissionsPanel
               requests={pendingPermissions}
               pending={
@@ -1804,8 +1887,8 @@ export function SessionsPage() {
                     placeholder={
                       dragging
                         ? "Suelta los archivos para adjuntarlos…"
-                        : waitingPermission
-                          ? "El agente espera tu aprobación arriba…"
+                        : waitingApproval
+                          ? "El agente espera tu aprobación o unos datos arriba…"
                           : running
                             ? "El agente está trabajando. Tu mensaje se encolará…"
                             : "Escribe un mensaje… (Enter para enviar, Shift+Enter para salto de línea)"

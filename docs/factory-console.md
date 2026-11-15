@@ -64,12 +64,14 @@ npm run test:e2e       # build + Playwright (servidor propio en :4174)
 
 - Vitest: utilidades de formato, cliente HTTP (reintentos, 401, timeout,
   contrato), SSE con `EventSource` simulado (apertura, reconexión y limpieza),
-  agrupación de turnos, `Transcript`, `SessionList` y adjuntos.
+  agrupación de turnos, `Transcript`, `SessionList`, adjuntos, permisos,
+  formularios, comandos, traspaso, linaje y detección de perfil.
 - Playwright: login obligatorio y persistente, crear chat, cambiar de sesión,
-  conservar borrador y adjunto tras recargar, borrar chat y navegación móvil.
+  conservar borrador y adjunto tras recargar, borrar chat, navegación móvil y
+  corte de red de 10 s con SSE simulado sin duplicar ni perder mensajes.
 - El E2E usa el Chromium del sistema (`PLAYWRIGHT_CHROMIUM`) y no descarga
   navegadores.
-- Resultado actual: 72 pruebas unitarias/componente y 4 E2E en verde.
+- Resultado actual: 76 pruebas unitarias/componente y 5 E2E en verde.
 
 ## Fase 1 — Móvil, PWA y acceso remoto
 
@@ -156,13 +158,20 @@ Si no se usan tags, limita el acceso a los dispositivos del propietario y evita
 - **Permisos pendientes**: `permission.asked`/`permission.replied` se muestran
   en el panel de la sesión, en la lista y en un aviso global del Layout. Se
   responde con `once`, `always` o `reject` y motivo opcional.
+- **Formularios pendientes**: `form.created`/`form.replied`/`form.cancelled` se
+  muestran en el panel de la sesión y en la lista. Se responden con
+  `POST /api/session/:id/form/:formID/reply` (`answer`) y se cancelan con
+  `DELETE`. Tipos soportados: `string`, `number`, `integer`, `boolean` y
+  `multiselect`, con `required`, longitudes, patrón, mínimo/máximo y `when`.
 - **Sincronización entre pestañas**: la sesión abierta y los borradores viajan
   por `localStorage` (`storage`). No se pisan si el usuario está escribiendo en
   la pestaña activa.
 - **Reconciliación**: al volver de segundo plano o recuperar la red se
-  refrescan sesiones, sesiones activas, contexto y permisos. Las sesiones
-  borradas en otra pestaña desaparecen de la lista y no dejan buffers de
-  streaming huérfanos.
+  refrescan sesiones, sesiones activas, contexto, permisos y formularios. Las
+  sesiones borradas en otra pestaña desaparecen de la lista y no dejan buffers
+  de streaming huérfanos.
+- **Criterio de red**: un E2E con SSE simulado corta la red 10 s y verifica que
+  la sesión se recupera sin duplicar ni perder mensajes.
 - **Envío con reintento manual**: si el prompt falla, el texto y los adjuntos
   siguen en el compositor y el error queda visible; no hay cola automática.
 - **Adjuntos pendientes** en IndexedDB (7 días) y restauración de scroll por
@@ -244,8 +253,13 @@ comandos se abre al escribir `/` en el compositor (↑↓, Tab, Enter, Esc).
 
 ## Pendiente / límites conocidos
 
-- El SSE está cubierto con un `EventSource` simulado en Vitest (apertura,
-  reconexión y limpieza); no hay E2E contra un servidor SSE simulado.
+- El SSE tiene un E2E con stream simulado que corta la red 10 s y comprueba que
+  no se duplican ni pierden mensajes; el `EventSource` simulado en Vitest cubre
+  apertura, reconexión y limpieza.
+- Los formularios están cubiertos con pruebas de componente; no hay un E2E con
+  un agente real que emita `form.created`.
+- El linaje y los checkpoints viven en `localStorage`; la persistencia en
+  PostgreSQL es la etapa 2 de la continuación.
 - La virtualización de transcripciones y la paginación de sesiones son Fase 3.
 - Notificaciones nativas y PWA instalable con prompt (`beforeinstallprompt`) no
   están implementadas.

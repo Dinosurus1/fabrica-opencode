@@ -129,7 +129,9 @@ export function SessionList({
             <p className="text-[10px] text-faint">
               {sessions.length} {sessions.length === 1 ? "conversación" : "conversaciones"}
               {attentionCount > 0
-                ? ` · ${attentionCount} ${attentionCount === 1 ? "pide" : "piden"} permiso`
+                ? ` · ${attentionCount} ${
+                    attentionCount === 1 ? "necesita" : "necesitan"
+                  } tu intervención`
                 : ""}
             </p>
           </div>
@@ -264,7 +266,7 @@ export function SessionList({
                           </span>
                           <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] tabular-nums text-faint">
                             {attention ? (
-                              <span title="Espera aprobación" aria-label="Pide permiso">
+                              <span title="Espera tu intervención" aria-label="Necesita atención">
                                 <ShieldAlert size={11} className="text-warning" />
                               </span>
                             ) : null}

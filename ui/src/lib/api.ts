@@ -3,6 +3,8 @@ import { sessionListSchema } from "./schemas";
 import type {
   AgentInfo,
   CatalogModel as _CatalogModel,
+  FormAnswer,
+  FormRequest,
   McpServer,
   ModelRef,
   Project,
@@ -131,6 +133,27 @@ export const api = {
         }),
       },
     ),
+
+  forms: (directory?: string) =>
+    request<{ data: FormRequest[] }>(withLocation("/api/form", directory)).then((value) =>
+      unwrapList<FormRequest>(value),
+    ),
+
+  sessionForms: (id: string) =>
+    request<{ data: FormRequest[] }>(`/api/session/${encodeURIComponent(id)}/form`).then((value) =>
+      unwrapList<FormRequest>(value),
+    ),
+
+  replyForm: (sessionId: string, formId: string, answer: FormAnswer) =>
+    request<void>(
+      `/api/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}/reply`,
+      { method: "POST", body: JSON.stringify({ answer }) },
+    ),
+
+  cancelForm: (sessionId: string, formId: string) =>
+    request<void>(`/api/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}`, {
+      method: "DELETE",
+    }),
 
   agents: (directory?: string) =>
     request<{ data: AgentInfo[] }>(withLocation("/api/agent", directory)).then((value) =>
