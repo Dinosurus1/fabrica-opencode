@@ -91,22 +91,40 @@ npm run test:e2e       # build + Playwright (servidor propio en :4174)
 
 ### Tailscale
 
-La consola escucha solo en `127.0.0.1`. Para usarla desde el móvil:
+La consola escucha solo en `127.0.0.1`. Ya está publicada en la tailnet en
+**https://<equipo>.<tailnet>.ts.net:8443/**; el 443 sigue siendo el Funnel de
+`host principal`.
 
 ```bash
 # Una vez, para no ejecutar serve como root:
 sudo tailscale set --operator=$USER
 
-# Publicar en el puerto 8443 (no toca el 443 del host principal):
-./scripts/factory-tailscale.sh enable
-
-# Estado / retirar:
+# Estado / publicar / retirar:
 ./scripts/factory-tailscale.sh status
+./scripts/factory-tailscale.sh enable
 ./scripts/factory-tailscale.sh disable
 ```
 
-Abre `https://<equipo>.ts.net:8443/` desde un dispositivo de la tailnet e inicia
-sesión. El 443 actual del host principal no se modifica.
+### Acceso desde el móvil
+
+1. Instala Tailscale en el móvil e inicia sesión con la misma cuenta
+   (`tu-cuenta@ejemplo.com`). Deja la VPN conectada.
+2. Abre **https://<equipo>.<tailnet>.ts.net:8443/**.
+3. Introduce la contraseña de la consola. En el PC:
+   ```bash
+   cat ~/.config/opencode/ui/.env.local
+   ```
+   También puedes fijar una contraseña que recuerdes:
+   ```bash
+   ./scripts/factory-set-password.sh --ask
+   ```
+4. Para instalarla como app:
+   - Android/Chrome: menú → «Instalar aplicación» o «Añadir a pantalla de inicio».
+   - iOS/Safari: compartir → «Añadir a pantalla de inicio».
+5. Si el móvil pierde la VPN, verás la pantalla de «Sin conexión»; reconecta
+   Tailscale y reintenta.
+
+La URL solo responde dentro de la tailnet. No se ha tocado el Funnel del host principal.
 
 ACL recomendada (ejemplo, adaptar a los tags reales):
 

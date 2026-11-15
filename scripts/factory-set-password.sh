@@ -8,7 +8,18 @@ TARGET="$ROOT/ui/.env.local"
 UMASK_ORIGINAL="$(umask)"
 umask 077
 
-PASSWORD="$(node -e 'console.log(require("node:crypto").randomBytes(24).toString("base64url"))')"
+PASSWORD="${1:-}"
+if [ "$PASSWORD" = "--ask" ]; then
+  read -rsp "Nueva contraseña (mínimo 12 caracteres): " PASSWORD
+  echo
+fi
+if [ -z "$PASSWORD" ]; then
+  PASSWORD="$(node -e 'console.log(require("node:crypto").randomBytes(12).toString("base64url"))')"
+fi
+if [ "${#PASSWORD}" -lt 12 ]; then
+  echo "La contraseña debe tener al menos 12 caracteres." >&2
+  exit 1
+fi
 if [ -f "$TARGET" ]; then
   grep -v -E '^(FACTORY_UI_PASSWORD|FACTORY_UI_REQUIRE_AUTH)=' "$TARGET" > "$TARGET.tmp" || true
   mv "$TARGET.tmp" "$TARGET"
