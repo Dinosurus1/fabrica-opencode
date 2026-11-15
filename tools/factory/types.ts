@@ -39,6 +39,13 @@ export function looksLikeSecret(text: string): boolean {
     /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
     /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
     /\b(?:password|passwd|contraseña|secret|token|api[_-]?key)\s*[:=]\s*["']?[^\s"']{8,}/i,
+    // Datos privados: host concreto del tailnet, correos e IPs RFC1918/CGNAT.
+    /\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.(?:[a-z0-9-]+\.)*ts\.net\b/i,
+    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/,
+    /\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/,
+    /\b192\.168\.\d{1,3}\.\d{1,3}\b/,
+    /\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b/,
+    /\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b/,
   ];
   return patterns.some((pattern) => pattern.test(text));
 }

@@ -460,7 +460,7 @@ export function createMemoryTools(deps: MemoryToolsDeps): ToolDef[] {
           }
           if (Object.keys(sections).length === 0) return fail("Incluye sections o content.");
           if (looksLikeSecret(JSON.stringify({ sections, related: input.related }))) {
-            return fail("Rechazado: el contenido parece incluir un secreto.");
+            return fail("Rechazado: el contenido parece incluir un secreto o un dato privado.");
           }
           const title = input.title ? String(input.title).slice(0, 120) : null;
           const kind = typeof input.kind === "string" ? input.kind : defaultKind(entityKey);
