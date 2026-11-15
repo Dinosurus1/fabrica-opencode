@@ -1,9 +1,9 @@
-# Factory Console — Fase 0 y Fase 1
+# Factory Console — Fase 0, Fase 1 y Fase 2
 
 Fecha: 2026-11-15. Ámbito: `ui/` y `scripts/`.
 
-Este documento describe lo implementado de las fases 0 y 1 del mapa de mejoras,
-el modelo de amenaza y lo que queda pendiente.
+Este documento describe lo implementado de las fases 0, 1 y 2 del mapa de
+mejoras, el modelo de amenaza y lo que queda pendiente.
 
 ## Fase 0 — Calidad y seguridad base
 
