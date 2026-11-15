@@ -246,7 +246,22 @@ O desde la raíz del repo:
 
 Abre <http://127.0.0.1:4173>. El servidor Node sirve `dist/` y proxya `/api` con
 Basic auth leída de `~/.config/opencode/service.json` o `OPENCODE_PASSWORD`; la
-contraseña nunca llega al navegador. Escucha solo en `127.0.0.1` por defecto.
+contraseña de OpenCode nunca llega al navegador. La consola tiene login propio
+con cookie HttpOnly (`FACTORY_UI_PASSWORD` o `service.json`), rate limit y
+cabeceras CSP. Escucha solo en `127.0.0.1` por defecto.
+
+Arranque automático (systemd de usuario + apertura al iniciar sesión):
+
+```bash
+./scripts/install-factory-autostart.sh
+./scripts/factory-set-password.sh   # guarda la contraseña en ui/.env.local
+cat ui/.env.local                   # consulta la contraseña generada
+```
+
+Es una PWA instalable con pantalla offline. Para acceso desde el móvil, publica
+solo el puerto 8443 en la tailnet con `./scripts/factory-tailscale.sh enable`
+(requiere `sudo tailscale set --operator=$USER`); no toca el 443 del host principal. Ver
+`docs/factory-console.md` para el modelo de amenaza y las pruebas.
 
 Módulos: Overview, Sessions, Work, Agents, Models, Memory, Projects, Skills,
 Analytics y Settings. La UI envía `location[directory]` del proyecto

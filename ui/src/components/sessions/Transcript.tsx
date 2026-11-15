@@ -29,12 +29,12 @@ export function messageText(message: SessionMessage): string {
   return (parts.join("\n") || message.text || "").trim();
 }
 
-type Turn =
+export type Turn =
   | { kind: "user"; messages: SessionMessage[] }
   | { kind: "assistant"; messages: SessionMessage[] }
   | { kind: "info"; messages: SessionMessage[] };
 
-function buildTurns(messages: SessionMessage[]): Turn[] {
+export function buildTurns(messages: SessionMessage[]): Turn[] {
   const turns: Turn[] = [];
   for (const message of messages) {
     if (message.type === "assistant") {
@@ -84,32 +84,62 @@ export function Transcript({
   loading,
   error,
   onRetry,
+  sessionId,
 }: {
   messages: SessionMessage[];
   running: boolean;
   loading?: boolean;
   error?: unknown;
   onRetry?: () => void;
+  sessionId?: string;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const restored = useRef(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [stick, setStick] = useState(true);
   const turns = useMemo(() => buildTurns(messages), [messages]);
+  const storageKey = sessionId ? `factory.sessions.scroll.${sessionId}` : null;
   const lastTextLength = messages.length
     ? messageText(messages[messages.length - 1]).length
     : 0;
 
   useEffect(() => {
-    if (!stick) return;
+    restored.current = false;
+    setStick(true);
+  }, [sessionId]);
+
+  useEffect(() => {
     const node = scrollRef.current;
     if (!node) return;
+    if (!restored.current && messages.length > 0) {
+      restored.current = true;
+      const saved = Number((storageKey && localStorage.getItem(storageKey)) || 0);
+      const distanceToBottom = node.scrollHeight - node.clientHeight - saved;
+      if (saved > 0 && distanceToBottom > 120) {
+        node.scrollTop = saved;
+        setStick(false);
+        return;
+      }
+    }
+    if (!stick) return;
     node.scrollTop = node.scrollHeight;
-  }, [messages, turns.length, running, lastTextLength, stick]);
+  }, [messages, turns.length, running, lastTextLength, stick, storageKey]);
 
   const onScroll = () => {
     const node = scrollRef.current;
     if (!node) return;
     const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
     setStick(distance < 120);
+    if (storageKey) {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => {
+        try {
+          localStorage.setItem(storageKey, String(Math.round(node.scrollTop)));
+        } catch {
+          // localStorage lleno o no disponible; el scroll sigue en memoria.
+        }
+      }, 150);
+    }
   };
 
   const jumpToEnd = () => {

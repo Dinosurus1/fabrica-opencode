@@ -81,6 +81,14 @@ export function useSessionEvents(onEvent: (event: LiveEvent) => void) {
 
     const connect = () => {
       if (closed) return;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = undefined;
+      }
+      if (source) {
+        source.close();
+        source = null;
+      }
       const params = new URLSearchParams();
       for (const type of SESSION_EVENT_TYPES) params.append("types", type);
       const next = new EventSource(filtered ? `/api/event?${params.toString()}` : "/api/event");
@@ -108,6 +116,16 @@ export function useSessionEvents(onEvent: (event: LiveEvent) => void) {
         setStatus(next.readyState === EventSource.CLOSED ? "offline" : "reconnecting");
         if (next.readyState !== EventSource.CLOSED) return;
         next.close();
+        void fetch("/auth/session", { signal: AbortSignal.timeout(3000) })
+          .then((response) => response.json())
+          .then((value: { authenticated?: boolean }) => {
+            if (value?.authenticated === false) {
+              window.dispatchEvent(new CustomEvent("factory:unauthorized"));
+            }
+          })
+          .catch(() => {
+            // Sin red: el reintento normal se encarga.
+          });
         // Si el filtro de tipos no llega a abrir (por ejemplo, un evento
         // renombrado en una versión nueva), se reintenta sin filtro.
         if (!everOpened && filtered) {
@@ -127,6 +145,7 @@ export function useSessionEvents(onEvent: (event: LiveEvent) => void) {
     const onVisibility = () => {
       if (document.visibilityState !== "visible" || closed) return;
       if (source && source.readyState !== EventSource.CLOSED) return;
+      if (retryTimer) clearTimeout(retryTimer);
       attempt = 0;
       connect();
     };
@@ -134,6 +153,7 @@ export function useSessionEvents(onEvent: (event: LiveEvent) => void) {
     const onOnline = () => {
       if (closed) return;
       if (source && source.readyState !== EventSource.CLOSED) return;
+      if (retryTimer) clearTimeout(retryTimer);
       attempt = 0;
       connect();
     };

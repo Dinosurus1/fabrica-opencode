@@ -25,6 +25,7 @@ import { messageText, Transcript } from "../components/sessions/Transcript";
 import { useProject } from "../components/ProjectContext";
 import { Button, ConfirmDialog, Field, Modal } from "../components/ui";
 import { api } from "../lib/api";
+import { deleteAttachments, pruneAttachments, readAttachments, writeAttachments } from "../lib/attachmentStore";
 import { useSessionEvents, runningSessionIds } from "../lib/events";
 import { cn, formatCompact, formatUsd, relativeTime, shortPath } from "../lib/format";
 import { rpc } from "../lib/rpc";
@@ -193,7 +194,10 @@ export function SessionsPage() {
   const [optimistic, setOptimistic] = useState<OptimisticMessage | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [dragging, setDragging] = useState(false);
-  const attachments = useFileAttachments();
+  const attachments = useFileAttachments((files) => {
+    const sessionId = selectedRef.current;
+    if (sessionId) void writeAttachments(sessionId, files);
+  });
   const attachmentsRef = useRef<PendingAttachment[]>([]);
   attachmentsRef.current = attachments.files;
   const attachmentDrafts = useRef(new Map<string, PendingAttachment[]>());
@@ -253,8 +257,12 @@ export function SessionsPage() {
   }, [runningIds, pendingSessions]);
   const running = Boolean(selectedId && visibleRunning.has(selectedId));
 
-  const markPending = (sessionId: string) => {
-    setPendingSessions((current) => {
+  const addAttachmentsToCurrent = (files: FileList | File[]) => {
+    const target = selectedRef.current;
+    return attachments.add(files, { guard: () => selectedRef.current === target });
+  };
+
+  const markPending = (sessionId: string) => {    setPendingSessions((current) => {
       if (current.has(sessionId)) return current;
       const next = new Set(current);
       next.add(sessionId);
@@ -350,17 +358,34 @@ export function SessionsPage() {
   }, [profiles.data?.applied_profile_id]);
 
   // Cada conversación conserva su borrador y sus adjuntos pendientes. El texto
-  // se guarda en localStorage; los adjuntos quedan en memoria mientras la
-  // pestaña siga abierta.
+  // se guarda en localStorage; los adjuntos en IndexedDB.
   useEffect(() => {
     const previous = previousSessionRef.current;
     if (previous && previous !== selectedId) {
       attachmentDrafts.current.set(previous, attachmentsRef.current);
+      void writeAttachments(previous, attachmentsRef.current);
     }
     previousSessionRef.current = selectedId;
     setPrompt(selectedId ? readDraft(selectedId) : "");
-    attachments.replace(selectedId ? attachmentDrafts.current.get(selectedId) ?? [] : []);
+    const cached = selectedId ? attachmentDrafts.current.get(selectedId) : undefined;
+    attachments.replace(selectedId ? cached ?? [] : []);
+    if (!selectedId || cached) return;
+    // Si la pestaña se recargó, recupera los adjuntos pendientes de IndexedDB.
+    let active = true;
+    void readAttachments(selectedId)
+      .then((files) => {
+        if (!active || selectedRef.current !== selectedId || files.length === 0) return;
+        attachmentDrafts.current.set(selectedId, files);
+        attachments.replace(files);
+      });
+    return () => {
+      active = false;
+    };
   }, [selectedId]);
+
+  useEffect(() => {
+    void pruneAttachments();
+  }, []);
 
   useEffect(() => {
     storeValue(SELECTED_SESSION_KEY, selectedId);
@@ -512,6 +537,7 @@ export function SessionsPage() {
       );
       if (remaining.length > 0) attachmentDrafts.current.set(sessionId, remaining);
       else attachmentDrafts.current.delete(sessionId);
+      void writeAttachments(sessionId, remaining);
       if (selectedRef.current === sessionId) {
         for (const file of files) attachments.remove(file.id);
       }
@@ -534,6 +560,7 @@ export function SessionsPage() {
       queryClient.removeQueries({ queryKey: ["opencode", "session-context", id] });
       writeDraft(id, "");
       attachmentDrafts.current.delete(id);
+      void deleteAttachments(id);
       clearPending(id);
       setOptimistic((current) => (current?.sessionId === id ? null : current));
       if (selectedId === id) {
@@ -711,7 +738,7 @@ export function SessionsPage() {
 
   const totalSessions = filtered.length;
   return (
-    <div className="flex h-[calc(100dvh-6.5rem)] gap-3">
+    <div className="flex h-[calc(var(--app-height,100dvh)-6.5rem-3.5rem-env(safe-area-inset-bottom))] gap-3 lg:h-[calc(var(--app-height,100dvh)-6.5rem)]">
       {listOpen ? (
         <div
           className="fixed inset-0 z-30 bg-black/60 lg:hidden"
@@ -1000,6 +1027,7 @@ export function SessionsPage() {
               loading={context.isLoading}
               error={context.error}
               onRetry={() => void context.refetch()}
+              sessionId={selected.id}
             />
 
             <div className="border-t border-line-soft bg-carbon-900/80 px-3 py-3 lg:px-6">
@@ -1020,7 +1048,7 @@ export function SessionsPage() {
                   onDrop={(event) => {
                     event.preventDefault();
                     setDragging(false);
-                    if (event.dataTransfer.files.length) void attachments.add(event.dataTransfer.files);
+                    if (event.dataTransfer.files.length) void addAttachmentsToCurrent(event.dataTransfer.files);
                   }}
                 >
                   <AttachmentChips
@@ -1044,7 +1072,7 @@ export function SessionsPage() {
                       const pasted = filesFromClipboard(event.clipboardData);
                       if (pasted.length > 0) {
                         event.preventDefault();
-                        void attachments.add(pasted);
+                        void addAttachmentsToCurrent(pasted);
                       }
                     }}
                     placeholder={
@@ -1057,7 +1085,7 @@ export function SessionsPage() {
                     className="max-h-[220px] min-h-[26px] w-full resize-none bg-transparent text-[13px] leading-6 text-ink outline-none placeholder:text-faint"
                   />
                   <div className="mt-1.5 flex items-center gap-2">
-                    <AttachmentButton onAdd={attachments.add} disabled={send.isPending} />
+                    <AttachmentButton onAdd={addAttachmentsToCurrent} disabled={send.isPending} />
                     <span className="hidden text-[10px] text-faint sm:inline">
                       {running ? "En ejecución · puedes detenerla" : "Adjunta imágenes o documentos"}
                     </span>

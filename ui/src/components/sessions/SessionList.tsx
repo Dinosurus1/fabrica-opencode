@@ -215,6 +215,7 @@ export function SessionList({
                       key={session.id}
                       role="button"
                       tabIndex={0}
+                      aria-busy={running}
                       onClick={() => onSelect(session.id)}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
@@ -242,6 +243,7 @@ export function SessionList({
                         )}
                       />
                       <span className="min-w-0 flex-1">
+                        {running ? <span className="sr-only">Trabajando</span> : null}
                         <span className="flex items-center gap-1.5">
                           <span className="truncate text-[12.5px] font-medium leading-5">
                             {session.title ?? session.id}

@@ -39,21 +39,43 @@ Vite sirve en `127.0.0.1:4173` y proxya `/api` al servidor de OpenCode.
 
 ## Autenticación y proxy
 
-El navegador nunca recibe la contraseña de OpenCode. El servidor de la consola
-lee `OPENCODE_PASSWORD` o `~/.config/opencode/service.json` y añade la cabecera
-`Authorization: Basic` al proxy `/api`. La consola escucha solo en `127.0.0.1`
-por defecto.
+La consola tiene login propio con cookie de sesión. El navegador nunca recibe la
+contraseña de OpenCode: el servidor lee `OPENCODE_PASSWORD` o
+`~/.config/opencode/service.json` y añade `Authorization: Basic` al proxy
+`/api`. La consola escucha solo en `127.0.0.1` por defecto.
+
+- `FACTORY_UI_PASSWORD` define la contraseña de la consola; si falta, usa la de
+  `service.json`.
+- `./scripts/factory-set-password.sh` genera una contraseña local en
+  `ui/.env.local` (ignorado por git, modo 600).
+- Hay rate limit en login y en rutas mutables, y cabeceras CSP/anti-CSRF.
+- `FACTORY_UI_REQUIRE_AUTH=1` obliga login incluso sin contraseña configurada.
 
 Variables:
 
 | Variable | Default | Uso |
 |---|---|---|
 | `OPENCODE_URL` | `http://127.0.0.1:49374` | URL del servidor de OpenCode. |
-| `OPENCODE_PASSWORD` | leída de `service.json` | Contraseña Basic auth. |
+| `OPENCODE_PASSWORD` | leída de `service.json` | Contraseña Basic auth del proxy. |
+| `FACTORY_UI_PASSWORD` | leída de `service.json` | Contraseña del login de la consola. |
+| `FACTORY_UI_SESSION_TTL` | `604800` | Duración de la cookie de sesión (s). |
 | `FACTORY_UI_PORT` | `4173` | Puerto de la consola. |
 | `FACTORY_UI_HOST` | `127.0.0.1` | Interfaz de escucha. |
+| `FACTORY_UI_ALLOWED_HOSTS` | vacío | Hosts extra permitidos (Tailscale). |
 
-No publiques la consola en `0.0.0.0` sin poner delante autenticación y TLS.
+No publiques la consola en `0.0.0.0`. Para acceso remoto usa Tailscale Serve
+(`scripts/factory-tailscale.sh`) y mantén el login activo. Ver
+`docs/factory-console.md`.
+
+## Arranque automático
+
+```bash
+./scripts/install-factory-autostart.sh
+```
+
+Instala `factory-ui.service` (systemd de usuario, `Restart=always`), arranca
+OpenCode si no está levantado y deja un lanzador XDG que abre la página al
+iniciar la sesión gráfica.
 
 ## Módulos
 
@@ -128,6 +150,9 @@ Factory Console (React/Vite)
 | `npm run build` | Typecheck y build de producción en `dist/`. |
 | `npm run start` | Sirve `dist/` y proxya `/api` en `127.0.0.1:4173`. |
 | `npm run preview` | Preview de Vite (sin proxy de auth). |
+| `npm run test` | Vitest (utilidades, HTTP, componentes). |
+| `npm run test:e2e` | Build + Playwright (login, chats, borradores, adjuntos). |
+| `npm run check` | `tsc` + Vitest + build de producción. |
 
 ## Limitaciones conocidas
 

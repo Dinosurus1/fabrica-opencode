@@ -14,4 +14,12 @@ if [ ! -f dist/index.html ]; then
   npm run build
 fi
 
+# Carga la contraseña local de la consola si existe (nunca se imprime).
+if [ -f .env.local ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env.local
+  set +a
+fi
+
 exec npm run start

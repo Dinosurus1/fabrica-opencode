@@ -1,3 +1,5 @@
+import { jsonRequest, type JsonRequestInit } from "./http";
+import { sessionListSchema } from "./schemas";
 import type {
   AgentInfo,
   CatalogModel as _CatalogModel,
@@ -17,21 +19,14 @@ function withLocation(path: string, directory?: string): string {
   return `${path}${separator}location[directory]=${encodeURIComponent(directory)}`;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
+async function request<T>(path: string, init?: JsonRequestInit): Promise<T> {
+  return jsonRequest<T>(path, {
     ...init,
     headers: {
-      "content-type": "application/json",
       "x-factory-ui": "1",
       ...(init?.headers ?? {}),
     },
   });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`${response.status} ${response.statusText}: ${body.slice(0, 240)}`);
-  }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
 }
 
 export function unwrapList<T>(value: unknown): T[] {
@@ -47,9 +42,9 @@ export const api = {
     const params = new URLSearchParams({ limit: String(limit) });
     if (options.parentID) params.set("parentID", options.parentID);
     if (options.directory) params.set("directory", options.directory);
-    return request<{ data: Session[] }>(`/api/session?${params.toString()}`).then((value) =>
-      unwrapList<Session>(value),
-    );
+    return request<{ data: Session[] }>(`/api/session?${params.toString()}`, {
+      schema: sessionListSchema,
+    }).then((value) => unwrapList<Session>(value));
   },
 
   createSession: (input: {

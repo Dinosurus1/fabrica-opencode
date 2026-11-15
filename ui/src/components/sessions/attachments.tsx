@@ -39,21 +39,33 @@ function readAsDataUrl(file: File): Promise<string> {
   });
 }
 
-export function useFileAttachments() {
+export function useFileAttachments(onChange?: (files: PendingAttachment[]) => void) {
   const [files, setFiles] = useState<PendingAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
   const filesRef = useRef<PendingAttachment[]>([]);
+  const pendingCount = useRef(0);
+  const pendingBytes = useRef(0);
   filesRef.current = files;
 
-  const add = async (incoming: FileList | File[] | null | undefined) => {
+  const commit = (next: PendingAttachment[]) => {
+    filesRef.current = next;
+    setFiles(next);
+    onChange?.(next);
+  };
+
+  const add = async (
+    incoming: FileList | File[] | null | undefined,
+    options: { guard?: () => boolean } = {},
+  ) => {
     const list = incoming ? Array.from(incoming) : [];
     if (list.length === 0) return;
     setError(null);
 
     const accepted: File[] = [];
-    let count = filesRef.current.length;
-    let total = filesRef.current.reduce((sum, item) => sum + item.size, 0);
+    let count = filesRef.current.length + pendingCount.current;
+    let total =
+      filesRef.current.reduce((sum, item) => sum + item.size, 0) + pendingBytes.current;
 
     for (const file of list) {
       if (count >= MAX_ATTACHMENTS) {
@@ -74,6 +86,8 @@ export function useFileAttachments() {
     }
 
     if (accepted.length === 0) return;
+    pendingCount.current += accepted.length;
+    pendingBytes.current += accepted.reduce((sum, file) => sum + file.size, 0);
     setReading(true);
     try {
       const read = await Promise.all(
@@ -85,16 +99,22 @@ export function useFileAttachments() {
           dataUrl: await readAsDataUrl(file),
         })),
       );
-      setFiles((current) => [...current, ...read]);
+      if (options.guard && !options.guard()) return;
+      commit([...filesRef.current, ...read]);
     } catch {
       setError("No se pudo leer algún archivo.");
     } finally {
-      setReading(false);
+      pendingCount.current = Math.max(0, pendingCount.current - accepted.length);
+      pendingBytes.current = Math.max(
+        0,
+        pendingBytes.current - accepted.reduce((sum, file) => sum + file.size, 0),
+      );
+      setReading(pendingCount.current > 0);
     }
   };
 
   const remove = (id: string) => {
-    setFiles((current) => current.filter((item) => item.id !== id));
+    commit(filesRef.current.filter((item) => item.id !== id));
     setError(null);
   };
 
@@ -105,8 +125,7 @@ export function useFileAttachments() {
   };
 
   const clear = () => {
-    filesRef.current = [];
-    setFiles([]);
+    commit([]);
     setError(null);
   };
 

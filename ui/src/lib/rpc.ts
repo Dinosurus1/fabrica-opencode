@@ -1,3 +1,5 @@
+import { jsonRequest } from "./http";
+
 export async function rpc<T>(
   method: string,
   input: Record<string, unknown> = {},
@@ -6,16 +8,15 @@ export async function rpc<T>(
   const query = directory
     ? `?location[directory]=${encodeURIComponent(directory)}`
     : "";
-  const response = await fetch(`/api/rpc/opencode.factory/${method}${query}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-factory-ui": "1" },
-    body: JSON.stringify({ input }),
-  });
-  const body = (await response.json().catch(() => null)) as
-    | { output?: unknown; message?: string; type?: string }
-    | null;
-  if (!response.ok) {
-    throw new Error(body?.message ?? `${response.status} ${response.statusText}`);
-  }
+  const body = await jsonRequest<{ output?: unknown; message?: string; type?: string }>(
+    `/api/rpc/opencode.factory/${method}${query}`,
+    {
+      method: "POST",
+      headers: { "x-factory-ui": "1" },
+      body: JSON.stringify({ input }),
+      timeoutMs: 60_000,
+    },
+  );
+  if (body?.type === "error" && body.message) throw new Error(body.message);
   return body?.output as T;
 }

@@ -3,6 +3,7 @@ secrets/
 service.json
 .env
 .env.*
+!ui/.env.example
 *.pem
 *.key
 *.p12
@@ -38,6 +39,8 @@ __pycache__/
 venv/
 ui/dist/
 ui/.vite/
+ui/test-results/
+ui/playwright-report/
 .playwright-mcp/
 
 # Packs de Semgrep: licencia Semgrep Rules v1.0, se descargan aparte
