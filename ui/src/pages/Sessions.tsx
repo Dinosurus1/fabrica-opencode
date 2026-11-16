@@ -176,6 +176,12 @@ function toPromptInputFiles(files: PendingAttachment[]) {
   return files.map((file) => ({ uri: file.dataUrl, name: file.name }));
 }
 
+/**
+ * Red de seguridad del contexto abierto. Los eventos terminales ya provocan un
+ * refetch; este intervalo solo cubre el caso de un evento perdido.
+ */
+const CONTEXT_SAFETY_REFETCH_MS = 12_000;
+
 const STREAM_EVENTS = new Set([
   "session.text.started",
   "session.text.delta",
@@ -403,14 +409,33 @@ export function SessionsPage() {
     });
   };
 
+  // El contexto no se sondea cada 2 s: los deltas de texto llegan por SSE y el
+  // evento terminal (session.idle, execution.*) fuerza un refetch. El intervalo
+  // es solo una red de seguridad por si se pierde ese evento.
   const context = useQuery({
     queryKey: ["opencode", "session-context", selectedId],
     queryFn: () => api.sessionContext(selectedId!),
     enabled: Boolean(selectedId),
-    refetchInterval: running ? 2_000 : false,
+    refetchInterval: running ? CONTEXT_SAFETY_REFETCH_MS : false,
     refetchOnWindowFocus: true,
-    staleTime: 0,
+    staleTime: 3_000,
   });
+
+  // Fin de turno sin evento terminal (SSE caído o evento perdido): se pide el
+  // contexto una vez al pasar de «trabajando» a «inactiva». Cubre el hueco que
+  // dejaba el sondeo de 2 s sin volver a descargar la transcripción en bucle.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (!selectedId) {
+      wasRunning.current = false;
+      return;
+    }
+    // Si el evento terminal ya refrescó el contexto hace un momento, no se
+    // repite la descarga.
+    const reciente = Date.now() - context.dataUpdatedAt < 5_000;
+    if (wasRunning.current && !running && !reciente) void context.refetch();
+    wasRunning.current = running;
+  }, [running, selectedId, context.refetch, context.dataUpdatedAt]);
 
   const permissions = useQuery({
     queryKey: ["opencode", "session-permissions", selectedId],

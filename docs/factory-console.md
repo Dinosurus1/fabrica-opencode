@@ -246,6 +246,15 @@ Objetivo: sesiones de 200+ mensajes y muchas conversaciones sin tirones.
 - **Profiler opcional**: `?profile=1` guarda los commits en
   `window.__factoryProfile`. En el build de producción React no invoca
   `onRender`; la medición de commits se hizo con builds de desarrollo.
+- **Contexto sin sondeo**: el contexto de la sesión abierta usa `staleTime` de
+  3 s, se refresca con los eventos terminales (`session.idle`, `execution.*`) y
+  al pasar de «trabajando» a «inactiva»; mientras trabaja solo queda una red de
+  seguridad de 12 s. Antes se pedía la transcripción completa cada 2 s.
+  - Medición con 200 mensajes (payload de 537 KB) y un turno de 10 s:
+    **6 peticiones / 3.224 KB antes → 2 peticiones / 1.075 KB después**.
+  - Presupuesto cubierto por `ui/e2e/context-traffic.spec.ts` (≤4 peticiones y
+    ≤4× el payload por turno). El E2E de corte de red sigue en verde y no hay
+    mensajes duplicados.
 
 ### Antes / después
 
@@ -261,6 +270,7 @@ headless; React Profiler con builds de desarrollo.
 | Heap tras 10 cambios de sesión | 9,1 MB (+1,9) | 6,1 MB (+0,8) |
 | React Profiler (dev): commits / suma / máx | 4 / 85 ms / 44 ms | 7 / 102 ms / 32 ms |
 | Transcripción en el DOM | 200 mensajes | 80 en ventana + virtualización |
+| Peticiones del contexto por turno de 10 s (200 mensajes) | 6 (3.224 KB) | **2 (1.075 KB)** |
 
 Criterio de aceptación: apertura < 1 s (137 ms), INP < 200 ms (24 ms), bundle
 < 500 kB (287 kB), memoria acotada tras 10 cambios (+0,8 MB) y scroll
