@@ -200,6 +200,11 @@ Factory Console (React/Vite)
   `rechazar`). La política de permisos de cada agente sigue siendo de solo
   lectura en esta etapa.
 - Configuración y proveedores son de solo lectura en esta etapa.
-- El bundle inicial supera los 500 KB por Recharts; se puede dividir por rutas
-  cuando haga falta.
+- Rendimiento: transcripción virtualizada (`@tanstack/react-virtual`), ventana
+  inicial de 80 mensajes, paginación por cursor de sesiones, `React.lazy` por
+  ruta y markdown memoizado. El bundle principal queda en ~288 kB.
+- Las imágenes de más de 800 kB se comprimen a 1600 px (WebP/PNG) antes de
+  adjuntarlas; el chip muestra «comprimido» y el peso original.
+- `?profile=1` guarda los commits de React en `window.__factoryProfile`. El
+  build de producción no invoca `onRender`; la medición se hace con dev.
 - La UI no edita archivos de configuración ni hace push/deploy.

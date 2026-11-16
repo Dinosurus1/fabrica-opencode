@@ -1,12 +1,26 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { useFileAttachments } from "./attachments";
+import { shouldCompressImage, useFileAttachments } from "./attachments";
 
 function file(name: string, content = "hola", type = "text/plain") {
   return new File([content], name, { type });
 }
 
 describe("useFileAttachments", () => {
+  it("decide qué imágenes comprimir por tipo y peso", () => {
+    const bigJpeg = file("foto.jpg", "x", "image/jpeg");
+    Object.defineProperty(bigJpeg, "size", { value: 900 * 1024 });
+    const smallJpeg = file("mini.jpg", "x", "image/jpeg");
+    Object.defineProperty(smallJpeg, "size", { value: 100 * 1024 });
+    const bigText = file("nota.txt", "x", "text/plain");
+    Object.defineProperty(bigText, "size", { value: 900 * 1024 });
+    const svg = file("icono.svg", "x", "image/svg+xml");
+    Object.defineProperty(svg, "size", { value: 900 * 1024 });
+    expect(shouldCompressImage(bigJpeg)).toBe(true);
+    expect(shouldCompressImage(smallJpeg)).toBe(false);
+    expect(shouldCompressImage(bigText)).toBe(false);
+    expect(shouldCompressImage(svg)).toBe(false);
+  });
   it("lee un archivo y lo puede quitar", async () => {
     const { result } = renderHook(() => useFileAttachments());
     await act(async () => {

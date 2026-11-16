@@ -34,6 +34,9 @@ interface SessionListProps {
   onRetry?: () => void;
   error?: unknown;
   projectLabel?: string;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
 }
 
 const GROUPS = ["Hoy", "Ayer", "Últimos 7 días", "Este mes", "Anteriores"] as const;
@@ -93,6 +96,9 @@ export function SessionList({
   onRetry,
   error,
   projectLabel,
+  hasMore,
+  loadingMore,
+  onLoadMore,
 }: SessionListProps) {
   const groups = useMemo(() => {
     const map = new Map<string, Session[]>();
@@ -312,6 +318,19 @@ export function SessionList({
           ))
         )}
       </div>
+
+      {hasMore ? (
+        <div className="px-3 py-2">
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={loadingMore}
+            className="w-full rounded-md border border-line bg-carbon-900 px-2 py-1.5 text-[11px] text-muted transition-colors hover:text-ink disabled:opacity-50"
+          >
+            {loadingMore ? "Cargando…" : "Cargar más conversaciones"}
+          </button>
+        </div>
+      ) : null}
 
       <div className="flex items-center gap-2 border-t border-line-soft px-3 py-2 text-[10px] text-faint">
         <span className={cn("size-1.5 rounded-full", dotClass)} />

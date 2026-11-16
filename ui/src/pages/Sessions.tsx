@@ -30,7 +30,7 @@ import { PermissionsPanel } from "../components/sessions/Permissions";
 import { messageText, Transcript } from "../components/sessions/Transcript";
 import { useProject } from "../components/ProjectContext";
 import { Button, ConfirmDialog, Field, Modal } from "../components/ui";
-import { api } from "../lib/api";
+import { api, type SessionPage } from "../lib/api";
 import { deleteAttachments, pruneAttachments, readAttachments, writeAttachments } from "../lib/attachmentStore";
 import { findCommand, helpText, parseSlash, suggestCommands } from "../lib/commands";
 import { useSessionEvents, runningSessionIds } from "../lib/events";
@@ -302,11 +302,39 @@ export function SessionsPage() {
 
   const sessions = useQuery({
     queryKey: ["opencode", "sessions"],
-    queryFn: () => api.sessions(500),
+    queryFn: () => api.sessionPage({ limit: 80 }),
     refetchInterval: 25_000,
     refetchOnWindowFocus: true,
     staleTime: 5_000,
   });
+  const [extraSessions, setExtraSessions] = useState<Session[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const sessionList = useMemo(() => sessions.data?.data ?? [], [sessions.data]);
+  const allSessions = useMemo(() => {
+    const map = new Map<string, Session>();
+    // La primera página manda sobre las extras para no mostrar datos viejos.
+    for (const session of [...extraSessions, ...sessionList]) map.set(session.id, session);
+    return [...map.values()];
+  }, [sessionList, extraSessions]);
+
+  useEffect(() => {
+    setNextCursor(sessions.data?.cursor?.next ?? null);
+  }, [sessions.data]);
+
+  const loadMoreSessions = async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await api.sessionPage({ limit: 80, cursor: nextCursor });
+      setExtraSessions((current) => [...current, ...page.data]);
+      setNextCursor(page.cursor?.next ?? null);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
   const active = useQuery({
     queryKey: ["opencode", "active-sessions"],
     queryFn: api.activeSessions,
@@ -341,10 +369,10 @@ export function SessionsPage() {
     staleTime: 60_000,
   });
 
-  const selected = sessions.data?.find((session) => session.id === selectedId) ?? null;
+  const selected = allSessions.find((session) => session.id === selectedId) ?? null;
   const runningIds = useMemo(
-    () => runningSessionIds(active.data, sessions.data ?? []),
-    [active.data, sessions.data],
+    () => runningSessionIds(active.data, allSessions),
+    [active.data, allSessions],
   );
   const visibleRunning = useMemo(() => {
     const next = new Set(runningIds);
@@ -537,7 +565,7 @@ export function SessionsPage() {
 
   const filtered = useMemo(() => {
     const text = query.trim().toLowerCase();
-    return (sessions.data ?? [])
+    return allSessions
       .filter((session) => !isTemporaryDirectory(session.location?.directory))
       .filter((session) => {
         if (onlyProject && session.projectID !== projectId) return false;
@@ -551,7 +579,7 @@ export function SessionsPage() {
           .includes(text);
       })
       .sort((left, right) => right.time.updated - left.time.updated);
-  }, [sessions.data, onlyProject, projectId, query, showSubagents]);
+  }, [allSessions, onlyProject, projectId, query, showSubagents]);
 
   useEffect(() => {
     if (!selected) return;
@@ -689,9 +717,9 @@ export function SessionsPage() {
 
   useEffect(() => {
     if (!selectedId || !sessions.data) return;
-    if (sessions.data.some((session) => session.id === selectedId)) return;
+    if (allSessions.some((session) => session.id === selectedId)) return;
     setSelectedId(filtered[0]?.id ?? null);
-  }, [sessions.data, selectedId, filtered]);
+  }, [allSessions, sessions.data, selectedId, filtered]);
 
   useEffect(() => {
     if (!optimistic || optimistic.sessionId !== selectedId) return;
@@ -831,9 +859,11 @@ export function SessionsPage() {
     mutationFn: (id: string) => api.deleteSession(id),
     onSuccess: (_result, id) => {
       setDeleteTarget(null);
-      queryClient.setQueryData(["opencode", "sessions"], (current: Session[] | undefined) =>
-        (current ?? []).filter((session) => session.id !== id),
-      );
+      queryClient.setQueryData(["opencode", "sessions"], (current: SessionPage | undefined) => ({
+        ...(current ?? { data: [] }),
+        data: (current?.data ?? []).filter((session) => session.id !== id),
+      }));
+      setExtraSessions((current) => current.filter((session) => session.id !== id));
       queryClient.removeQueries({ queryKey: ["opencode", "session-context", id] });
       setStreamState((current) => clearSessionStreams(current, id));
       writeDraft(id, "");
@@ -919,13 +949,16 @@ export function SessionsPage() {
   });
 
   const refresh = () => {
+    setExtraSessions([]);
     void sessions.refetch();
     void active.refetch();
     if (selectedId) {
       void queryClient.invalidateQueries({ queryKey: ["opencode", "session-context", selectedId] });
       void queryClient.invalidateQueries({ queryKey: ["opencode", "session-permissions", selectedId] });
+      void queryClient.invalidateQueries({ queryKey: ["opencode", "session-forms", selectedId] });
     }
     void queryClient.invalidateQueries({ queryKey: ["opencode", "permission-requests"] });
+    void queryClient.invalidateQueries({ queryKey: ["opencode", "form-requests"] });
   };
 
   const createChat = useMutation({
@@ -993,10 +1026,13 @@ export function SessionsPage() {
         Boolean,
       );
       setNotice(warnings.length ? `Sesión creada. ${warnings.join(" · ")}` : null);
-      queryClient.setQueryData(["opencode", "sessions"], (current: Session[] | undefined) => [
-        created,
-        ...(current ?? []).filter((session) => session.id !== created.id),
-      ]);
+      queryClient.setQueryData(["opencode", "sessions"], (current: SessionPage | undefined) => ({
+        ...(current ?? { data: [] }),
+        data: [
+          created,
+          ...(current?.data ?? []).filter((session) => session.id !== created.id),
+        ],
+      }));
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["opencode", "sessions"] }),
         queryClient.invalidateQueries({ queryKey: ["factory", "profiles"] }),
@@ -1377,7 +1413,7 @@ export function SessionsPage() {
       ? lineageChain(newChat.parentId)
       : [];
   const parentSession = newChat?.parentId
-    ? sessions.data?.find((session) => session.id === newChat.parentId) ?? null
+    ? allSessions.find((session) => session.id === newChat.parentId) ?? null
     : null;
   const existingCheckpoint = newChat?.parentId ? readCheckpoint(newChat.parentId) : null;
   const pendingFormReply: FormReplyState | null =
@@ -1459,6 +1495,9 @@ export function SessionsPage() {
           onRetry={() => void sessions.refetch()}
           error={sessions.error}
           projectLabel={project ? shortPath(project.canonical) : undefined}
+          hasMore={Boolean(nextCursor)}
+          loadingMore={loadingMore}
+          onLoadMore={() => void loadMoreSessions()}
         />
       </aside>
 

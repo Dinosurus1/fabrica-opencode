@@ -75,7 +75,7 @@ npm run test:e2e       # build + Playwright (servidor propio en :4174)
   corte de red de 10 s con SSE simulado sin duplicar ni perder mensajes.
 - El E2E usa el Chromium del sistema (`PLAYWRIGHT_CHROMIUM`) y no descarga
   navegadores.
-- Resultado actual: 76 pruebas unitarias/componente y 5 E2E en verde.
+- Resultado actual: 77 pruebas unitarias/componente y 5 E2E en verde.
 
 ## Fase 1 — Móvil, PWA y acceso remoto
 
@@ -225,6 +225,47 @@ comandos se abre al escribir `/` en el compositor (↑↓, Tab, Enter, Esc).
   sigue disponible.
 - La clasificación es determinística y local (`profile-detect.ts`); no llama a
   un modelo.
+
+## Fase 3 — Rendimiento
+
+Objetivo: sesiones de 200+ mensajes y muchas conversaciones sin tirones.
+
+- **Virtualización**: `Transcript` usa `@tanstack/react-virtual` (overscan 8,
+  altura dinámica) y solo monta los turnos visibles. En jsdom se renderiza la
+  lista completa para que las pruebas de componente sigan siendo válidas.
+- **Carga por tramos**: la ventana inicial es de 80 mensajes; «Cargar 60
+  mensajes anteriores» amplía el historial sin pedir de nuevo al API.
+- **Paginación de sesiones**: `GET /api/session?limit=80` con `cursor.next`;
+  «Cargar más conversaciones» añade la siguiente página y deduplica por id.
+- **Code splitting**: `React.lazy` + `Suspense` por ruta; `Layout` se mantiene
+  eager. El bundle principal baja de 1.027 kB a 287 kB.
+- **Markdown memoizado**: `RichText` es `memo` y el parseo de bloques sigue en
+  `useMemo`; el texto de los mensajes antiguos no se vuelve a parsear.
+- **Imágenes**: las imágenes de más de 800 kB se reducen a 1600 px (WebP o PNG)
+  antes de adjuntarlas; el chip muestra «comprimido» y el peso original.
+- **Profiler opcional**: `?profile=1` guarda los commits en
+  `window.__factoryProfile`. En el build de producción React no invoca
+  `onRender`; la medición de commits se hizo con builds de desarrollo.
+
+### Antes / después
+
+Medición con una sesión simulada de 200 mensajes, servidor temporal y Chromium
+headless; React Profiler con builds de desarrollo.
+
+| Métrica | Antes | Después |
+|---|---|---|
+| Bundle principal JS | 1.027,64 kB (298,70 gzip) | 287,65 kB (91,21 gzip) |
+| Apertura de 200 mensajes (prod, PC) | 141 ms | 137 ms |
+| INP del click de sesión | 24 ms | 24 ms |
+| Heap tras abrir 200 mensajes | 7,2 MB | 5,3 MB |
+| Heap tras 10 cambios de sesión | 9,1 MB (+1,9) | 6,1 MB (+0,8) |
+| React Profiler (dev): commits / suma / máx | 4 / 85 ms / 44 ms | 7 / 102 ms / 32 ms |
+| Transcripción en el DOM | 200 mensajes | 80 en ventana + virtualización |
+
+Criterio de aceptación: apertura < 1 s (137 ms), INP < 200 ms (24 ms), bundle
+< 500 kB (287 kB), memoria acotada tras 10 cambios (+0,8 MB) y scroll
+virtualizado. El streaming por deltas y la sincronización entre pestañas no
+cambian.
 
 ## Memoria persistente
 

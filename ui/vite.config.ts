@@ -31,6 +31,10 @@ if (!password) {
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  optimizeDeps: {
+    // El optimizador de Vite no resuelve bien este paquete ESM en dev.
+    exclude: ["@tanstack/react-virtual"],
+  },
   server: {
     host: "127.0.0.1",
     port: 4173,

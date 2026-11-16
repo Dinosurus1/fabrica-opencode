@@ -1,6 +1,6 @@
 import "@fontsource-variable/inter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useEffect, useState, Profiler, type ProfilerOnRenderCallback } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { App } from "./App";
@@ -23,6 +23,20 @@ const queryClient = new QueryClient({
 registerServiceWorker();
 
 type AuthState = "checking" | "authenticated" | "anonymous";
+
+const profileEnabled =
+  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("profile");
+
+const onRender: ProfilerOnRenderCallback = (id, phase, actualDuration, _baseDuration, _startTime, commitTime) => {
+  if (!profileEnabled) return;
+  const target = window as Window & {
+    __factoryProfile?: Array<{ id: string; phase: string; actualDuration: number; commitTime: number }>;
+  };
+  target.__factoryProfile = [
+    ...(target.__factoryProfile ?? []),
+    { id, phase, actualDuration, commitTime },
+  ].slice(-200);
+};
 
 function AuthGate() {
   const [state, setState] = useState<AuthState>("checking");
@@ -72,7 +86,13 @@ createRoot(document.getElementById("root")!).render(
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
-          <AuthGate />
+          {profileEnabled ? (
+            <Profiler id="app" onRender={onRender}>
+              <AuthGate />
+            </Profiler>
+          ) : (
+            <AuthGate />
+          )}
         </BrowserRouter>
       </QueryClientProvider>
     </ErrorBoundary>

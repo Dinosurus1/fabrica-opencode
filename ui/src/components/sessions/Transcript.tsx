@@ -16,10 +16,14 @@ import {
   Terminal,
   Wrench,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, memo, type ReactNode } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn, formatCompact, formatDate, formatUsd, modelLabel } from "../../lib/format";
 import type { MessagePart, SessionMessage } from "../../lib/types";
 import { MessageFiles } from "./attachments";
+
+const TEST_ENVIRONMENT =
+  typeof navigator !== "undefined" && /jsdom/i.test(navigator.userAgent);
 
 export function messageText(message: SessionMessage): string {
   const parts = (message.content ?? [])
@@ -97,15 +101,29 @@ export function Transcript({
   const restored = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [stick, setStick] = useState(true);
-  const turns = useMemo(() => buildTurns(messages), [messages]);
+  const [windowSize, setWindowSize] = useState(80);
+  const visibleMessages = useMemo(
+    () => (messages.length > windowSize ? messages.slice(-windowSize) : messages),
+    [messages, windowSize],
+  );
+  const turns = useMemo(() => buildTurns(visibleMessages), [visibleMessages]);
+  const virtualizer = useVirtualizer({
+    count: turns.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 140,
+    overscan: 8,
+    getItemKey: (index) => turns[index]?.messages[0]?.id ?? index,
+  });
+  const virtualize = !TEST_ENVIRONMENT;
   const storageKey = sessionId ? `factory.sessions.scroll.${sessionId}` : null;
-  const lastTextLength = messages.length
-    ? messageText(messages[messages.length - 1]).length
+  const lastTextLength = visibleMessages.length
+    ? messageText(visibleMessages[visibleMessages.length - 1]).length
     : 0;
 
   useEffect(() => {
     restored.current = false;
     setStick(true);
+    setWindowSize(80);
   }, [sessionId]);
 
   useEffect(() => {
@@ -122,7 +140,11 @@ export function Transcript({
       }
     }
     if (!stick) return;
-    node.scrollTop = node.scrollHeight;
+    const frame = requestAnimationFrame(() => {
+      const current = scrollRef.current;
+      if (current) current.scrollTop = current.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [messages, turns.length, running, lastTextLength, stick, storageKey]);
 
   const onScroll = () => {
@@ -157,7 +179,7 @@ export function Transcript({
         className="h-full overflow-y-auto px-4 py-5 lg:px-8"
         aria-live="polite"
       >
-        <div className="mx-auto w-full max-w-3xl space-y-6">
+        <div className="mx-auto w-full max-w-3xl">
           {loading && messages.length === 0 ? (
             <div className="flex items-center justify-center gap-2 py-16 text-xs text-muted">
               <Loader2 size={14} className="animate-spin" /> Cargando conversación…
@@ -188,17 +210,63 @@ export function Transcript({
               </p>
             </div>
           ) : (
-            turns.map((turn, index) => (
-              <TurnView
-                key={turn.messages[0]?.id ?? index}
-                turn={turn}
-                live={running && index === turns.length - 1}
-              />
-            ))
+            <>
+              {messages.length > visibleMessages.length ? (
+                <div className="mb-4 flex justify-center">
+                  <button
+                    type="button"
+                    className="rounded-md border border-line bg-carbon-900 px-3 py-1 text-[11px] text-muted transition-colors hover:text-ink"
+                    onClick={() => setWindowSize((size) => size + 60)}
+                  >
+                    Cargar 60 mensajes anteriores
+                  </button>
+                </div>
+              ) : null}
+              {virtualize ? (
+                <div
+                  style={{
+                    height: `${virtualizer.getTotalSize()}px`,
+                    position: "relative",
+                    width: "100%",
+                  }}
+                >
+                  {virtualizer.getVirtualItems().map((item) => (
+                    <div
+                      key={item.key}
+                      data-index={item.index}
+                      ref={virtualizer.measureElement}
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        width: "100%",
+                        transform: `translateY(${item.start}px)`,
+                        paddingBottom: 24,
+                      }}
+                    >
+                      <TurnView
+                        turn={turns[item.index]}
+                        live={running && item.index === turns.length - 1}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {turns.map((turn, index) => (
+                    <TurnView
+                      key={turn.messages[0]?.id ?? index}
+                      turn={turn}
+                      live={running && index === turns.length - 1}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
           )}
 
           {running && messages.length > 0 ? (
-            <div className="flex items-center gap-2 pl-1 text-[11px] text-muted">
+            <div className="mt-4 flex items-center gap-2 pl-1 text-[11px] text-muted">
               <span className="flex gap-1">
                 <span className="size-1.5 animate-bounce rounded-full bg-violet-soft [animation-delay:0ms]" />
                 <span className="size-1.5 animate-bounce rounded-full bg-violet-soft [animation-delay:120ms]" />
@@ -475,7 +543,7 @@ function ToolCluster({ tools }: { tools: MessagePart[] }) {
   );
 }
 
-function RichText({ text }: { text: string }) {
+const RichText = memo(function RichText({ text }: { text: string }) {
   const blocks = useMemo(() => splitBlocks(text), [text]);
   return (
     <div className="space-y-2.5">
@@ -488,7 +556,7 @@ function RichText({ text }: { text: string }) {
       )}
     </div>
   );
-}
+});
 
 type Block = { kind: "text"; value: string } | { kind: "code"; value: string; language: string };
 

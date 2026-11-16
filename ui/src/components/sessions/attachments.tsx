@@ -13,6 +13,63 @@ export interface PendingAttachment {
   mime: string;
   size: number;
   dataUrl: string;
+  originalSize?: number;
+  compressed?: boolean;
+}
+
+const COMPRESSIBLE_IMAGES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const COMPRESS_THRESHOLD_BYTES = 800 * 1024;
+
+export function shouldCompressImage(file: File): boolean {
+  return COMPRESSIBLE_IMAGES.has(file.type) && file.size > COMPRESS_THRESHOLD_BYTES;
+}
+
+async function loadImage(file: File): Promise<ImageBitmap | HTMLImageElement> {
+  if (typeof createImageBitmap === "function") return createImageBitmap(file);
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("No se pudo decodificar la imagen"));
+    };
+    image.src = url;
+  });
+}
+
+/** Reduce imágenes grandes antes de adjuntarlas; si falla, conserva el original. */
+export async function compressImage(file: File): Promise<File> {
+  if (!shouldCompressImage(file)) return file;
+  try {
+    const image = await loadImage(file);
+    const width = "width" in image ? image.width : 0;
+    const height = "height" in image ? image.height : 0;
+    if (!width || !height) return file;
+    const scale = Math.min(1, 1600 / Math.max(width, height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) return file;
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    if ("close" in image && typeof image.close === "function") image.close();
+    const mime = file.type === "image/png" ? "image/png" : "image/webp";
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, mime, 0.82);
+    });
+    if (!blob || blob.size >= file.size) return file;
+    const extension = mime === "image/png" ? ".png" : ".webp";
+    return new File([blob], file.name.replace(/\.(png|jpe?g|webp)$/i, extension), {
+      type: mime,
+      lastModified: file.lastModified,
+    });
+  } catch {
+    return file;
+  }
 }
 
 function formatSize(bytes: number): string {
@@ -90,13 +147,20 @@ export function useFileAttachments(onChange?: (files: PendingAttachment[]) => vo
     pendingBytes.current += accepted.reduce((sum, file) => sum + file.size, 0);
     setReading(true);
     try {
+      const prepared = await Promise.all(
+        accepted.map(async (file) => {
+          const compressed = await compressImage(file);
+          return { file: compressed, originalSize: file.size };
+        }),
+      );
       const read = await Promise.all(
-        accepted.map(async (file) => ({
+        prepared.map(async ({ file, originalSize }) => ({
           id: crypto.randomUUID(),
           name: file.name || "archivo",
           mime: file.type || "application/octet-stream",
           size: file.size,
           dataUrl: await readAsDataUrl(file),
+          ...(file.size < originalSize ? { originalSize, compressed: true } : {}),
         })),
       );
       if (options.guard && !options.guard()) return;
@@ -197,7 +261,11 @@ export function AttachmentChips({
                 "group relative flex items-center gap-2 overflow-hidden rounded-lg border border-line bg-carbon-900",
                 image ? "p-1" : "px-2 py-1.5",
               )}
-              title={`${file.name} · ${formatSize(file.size)}`}
+              title={`${file.name} · ${formatSize(file.size)}${
+                file.compressed && file.originalSize
+                  ? ` (comprimido desde ${formatSize(file.originalSize)})`
+                  : ""
+              }`}
             >
               {image ? (
                 <img
@@ -212,6 +280,11 @@ export function AttachmentChips({
                   <span className="shrink-0 text-[10px] text-faint">{formatSize(file.size)}</span>
                 </>
               )}
+              {file.compressed ? (
+                <span className="absolute bottom-0.5 left-0.5 rounded bg-carbon-950/90 px-1 text-[8px] font-medium text-success">
+                  comprimido
+                </span>
+              ) : null}
               <button
                 type="button"
                 onClick={() => onRemove(file.id)}

@@ -40,8 +40,27 @@ export function unwrapList<T>(value: unknown): T[] {
   return Array.isArray(data) ? (data as T[]) : [];
 }
 
+export interface SessionPage {
+  data: Session[];
+  cursor?: { next?: string; previous?: string };
+}
+
 export const api = {
   projects: () => request<Project[] | { data: Project[] }>("/api/project").then((value) => unwrapList<Project>(value)),
+
+  sessionPage: (options: {
+    limit?: number;
+    cursor?: string;
+    parentID?: string;
+    directory?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (options.limit) params.set("limit", String(options.limit));
+    if (options.cursor) params.set("cursor", options.cursor);
+    if (options.parentID) params.set("parentID", options.parentID);
+    if (options.directory) params.set("directory", options.directory);
+    return request<SessionPage>(`/api/session?${params.toString()}`);
+  },
 
   sessions: (limit = 60, options: { parentID?: string; directory?: string } = {}) => {
     const params = new URLSearchParams({ limit: String(limit) });
