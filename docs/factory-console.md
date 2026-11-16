@@ -43,10 +43,14 @@ mejoras, el modelo de amenaza y lo que queda pendiente.
 
 - `factory-ui.service` (systemd de usuario) sirve la consola con
   `Restart=always`.
-- Al arrancar, el servidor comprueba OpenCode y lo levanta con
-  `opencode serve --service` si no responde.
-- Botón «Encender» en la cabecera cuando `/healthz` falla.
-- `POST /api/system/start` (autenticado y con cabecera) fuerza el arranque.
+- Al arrancar, el servidor comprueba la fábrica y levanta lo que falte:
+  PostgreSQL (`docker start` del contenedor) y OpenCode
+  (`opencode serve --service`).
+- Botón «Encender» en la cabecera cuando falla la salud de la fábrica (RPC
+  `health`: PostgreSQL u OpenCode). Si falla, muestra el motivo.
+- `POST /api/system/start` (autenticado y con cabecera) fuerza el arranque de
+  ambos y devuelve `database` y el estado del upstream.
+- `GET /healthz` responde 200 solo si están la consola, OpenCode y PostgreSQL.
 - `~/.config/autostart/factory-console.desktop` abre la página al iniciar la
   sesión gráfica.
 - Instalación idempotente:

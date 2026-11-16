@@ -62,6 +62,10 @@ Variables:
 | `FACTORY_UI_PORT` | `4173` | Puerto de la consola. |
 | `FACTORY_UI_HOST` | `127.0.0.1` | Interfaz de escucha. |
 | `FACTORY_UI_ALLOWED_HOSTS` | vacío | Hosts extra permitidos (Tailscale). |
+| `FACTORY_DB_CONTAINER` | `opencode-memory-db` | Contenedor PostgreSQL que arranca el botón «Encender». |
+| `FACTORY_DB_HOST` | `127.0.0.1` | Host de PostgreSQL para la comprobación de salud. |
+| `FACTORY_DB_PORT` | `5433` | Puerto de PostgreSQL. |
+| `FACTORY_DB_AUTOSTART` | `1` | `0` desactiva el arranque por Docker (base gestionada aparte). |
 
 No publiques la consola en `0.0.0.0`. Para acceso remoto usa Tailscale Serve
 (`scripts/factory-tailscale.sh`) y mantén el login activo. Ver
@@ -74,8 +78,8 @@ No publiques la consola en `0.0.0.0`. Para acceso remoto usa Tailscale Serve
 ```
 
 Instala `factory-ui.service` (systemd de usuario, `Restart=always`), arranca
-OpenCode si no está levantado y deja un lanzador XDG que abre la página al
-iniciar la sesión gráfica.
+PostgreSQL y OpenCode si no están levantados y deja un lanzador XDG que abre la
+página al iniciar la sesión gráfica.
 
 ## Módulos
 

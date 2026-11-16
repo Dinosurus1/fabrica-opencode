@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   BarChart3,
@@ -23,7 +23,7 @@ import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { api } from "../lib/api";
 import { cn, shortPath } from "../lib/format";
 import { useFactoryHealth } from "../lib/hooks";
-import { jsonRequest } from "../lib/http";
+import { jsonRequest, HttpError } from "../lib/http";
 import { useOnlineStatus } from "../lib/pwa";
 import { useViewportHeight } from "../lib/viewport";
 import { useProject } from "./ProjectContext";
@@ -57,11 +57,35 @@ const navigation = [
   },
 ];
 
+function startFailure(error: unknown): string {
+  if (error instanceof HttpError) {
+    try {
+      const body = JSON.parse(error.body) as {
+        database?: { ok?: boolean; error?: string; disabled?: boolean };
+        timeout?: boolean;
+      };
+      if (body.database?.ok === false) {
+        if (body.database.disabled) {
+          return "PostgreSQL está caído y el autoarranque está desactivado";
+        }
+        return `PostgreSQL no arrancó${body.database.error ? `: ${body.database.error}` : ""}`;
+      }
+      if (body.timeout) return "OpenCode no respondió a tiempo";
+    } catch {
+      // Cuerpo no JSON: se usa el estado HTTP.
+    }
+    return `No se pudo encender (${error.status})`;
+  }
+  return error instanceof Error ? error.message : "No se pudo encender";
+}
+
 export function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
   const edgeSwipe = useRef<{ x: number; y: number } | null>(null);
   const location = useLocation();
+  const queryClient = useQueryClient();
   useViewportHeight();
   const online = useOnlineStatus();
   const { projects, project, projectId, setProjectId } = useProject();
@@ -96,15 +120,31 @@ export function Layout() {
   const startUpstream = async () => {
     if (starting) return;
     setStarting(true);
+    setStartError(null);
     try {
-      await jsonRequest("/api/system/start", {
+      const result = await jsonRequest<{
+        ok?: boolean;
+        database?: { ok?: boolean; error?: string };
+      }>("/api/system/start", {
         method: "POST",
         headers: { "x-factory-ui": "1" },
-        timeoutMs: 30_000,
+        timeoutMs: 45_000,
       });
+      if (result.ok === false) {
+        setStartError(
+          result.database?.ok === false
+            ? `PostgreSQL no arrancó${result.database.error ? `: ${result.database.error}` : ""}`
+            : "OpenCode no respondió a tiempo",
+        );
+      }
       await health.refetch();
+      // Los paneles que fallaron con la fábrica caída conservan su error hasta
+      // que se invalidan; al encender deben recuperarse solos.
+      await queryClient.invalidateQueries();
     } catch (error) {
-      console.warn("[factory-console] no se pudo arrancar OpenCode", error);
+      console.warn("[factory-console] no se pudo arrancar la fábrica", error);
+      setStartError(startFailure(error));
+      await health.refetch();
     } finally {
       setStarting(false);
     }
@@ -303,11 +343,20 @@ export function Layout() {
                 onClick={startUpstream}
                 disabled={starting}
                 className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-warning/40 bg-warning/10 px-2.5 text-[11px] font-medium text-warning disabled:opacity-50"
-                title="Arrancar el servidor de OpenCode"
+                title={startError ?? "Arrancar la fábrica (PostgreSQL y OpenCode)"}
               >
                 <Power size={13} className={starting ? "animate-pulse" : undefined} />
                 {starting ? "Encendiendo…" : "Encender"}
               </button>
+            ) : null}
+            {startError ? (
+              <span
+                className="hidden max-w-[220px] truncate text-[10px] text-danger sm:inline"
+                title={startError}
+                role="status"
+              >
+                {startError}
+              </span>
             ) : null}
             <div
               className="hidden items-center gap-2 rounded-full border border-line bg-carbon-900 px-3 py-1.5 text-[11px] text-muted sm:flex"

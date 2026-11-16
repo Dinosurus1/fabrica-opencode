@@ -249,7 +249,9 @@ Abre <http://127.0.0.1:4173>. El servidor Node sirve `dist/` y proxya `/api` con
 Basic auth leída de `~/.config/opencode/service.json` o `OPENCODE_PASSWORD`; la
 contraseña de OpenCode nunca llega al navegador. La consola tiene login propio
 con cookie HttpOnly (`FACTORY_UI_PASSWORD` o `service.json`), rate limit y
-cabeceras CSP. Escucha solo en `127.0.0.1` por defecto.
+cabeceras CSP. Escucha solo en `127.0.0.1` por defecto. El botón «Encender» y el
+arranque del servicio levantan PostgreSQL (`opencode-memory-db`) y OpenCode si
+falta alguno.
 
 Arranque automático (systemd de usuario + apertura al iniciar sesión):
 

@@ -11,6 +11,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
+import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +21,14 @@ const dist = join(root, "dist");
 const port = Number(process.env.FACTORY_UI_PORT ?? 4173);
 const host = process.env.FACTORY_UI_HOST ?? "127.0.0.1";
 const target = new URL(process.env.OPENCODE_URL ?? "http://127.0.0.1:49374");
+// PostgreSQL de la fábrica: el botón «Encender» también lo levanta. Si la base
+// no vive en Docker, define FACTORY_DB_AUTOSTART=0 y arráncala por tu cuenta.
+const factoryDb = {
+  container: process.env.FACTORY_DB_CONTAINER ?? "opencode-memory-db",
+  host: process.env.FACTORY_DB_HOST ?? "127.0.0.1",
+  port: Number(process.env.FACTORY_DB_PORT ?? 5433),
+  autostart: process.env.FACTORY_DB_AUTOSTART !== "0",
+};
 const sessionTtlSeconds = Number(process.env.FACTORY_UI_SESSION_TTL ?? 7 * 24 * 3600);
 const cookieName = "factory_session";
 const allowedHosts = (process.env.FACTORY_UI_ALLOWED_HOSTS ?? "")
@@ -422,27 +431,87 @@ function openCodeBinary() {
   return existsSync(local) ? local : "opencode";
 }
 
+function databaseReachable() {
+  return new Promise((resolveReachable) => {
+    let socket;
+    try {
+      socket = createConnection({ host: factoryDb.host, port: factoryDb.port });
+    } catch {
+      resolveReachable(false);
+      return;
+    }
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolveReachable(ok);
+    };
+    socket.setTimeout(1200);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+  });
+}
+
+async function startDatabase() {
+  if (await databaseReachable()) return { ok: true, started: false };
+  if (!factoryDb.autostart) return { ok: false, started: false, disabled: true };
+  const result = spawnSync("docker", ["start", factoryDb.container], {
+    timeout: 20_000,
+    encoding: "utf8",
+  });
+  if (result.error || result.status !== 0) {
+    const detail = result.error?.message ?? (result.stderr || "").trim();
+    return { ok: false, started: false, error: detail || "no se pudo arrancar el contenedor" };
+  }
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+    if (await databaseReachable()) return { ok: true, started: true };
+  }
+  return { ok: false, started: true, timeout: true };
+}
+
+async function waitForUpstream() {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+    const status = await upstreamStatus();
+    if (status.ok) return status;
+  }
+  return null;
+}
+
 let starting = null;
-async function startUpstream() {
-  const current = await upstreamStatus();
-  if (current.ok) return { started: false, ...current };
+async function startFactory() {
   if (starting) return starting;
   starting = (async () => {
-    const child = spawn(openCodeBinary(), ["serve", "--service"], {
-      detached: true,
-      stdio: "ignore",
-      env: process.env,
-    });
-    child.on("error", (error) => {
-      console.warn(`No se pudo ejecutar ${openCodeBinary()}: ${error.message}`);
-    });
-    child.unref();
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      await new Promise((resolveWait) => setTimeout(resolveWait, 500));
-      const status = await upstreamStatus();
-      if (status.ok) return { started: true, ...status };
+    // La fábrica son dos piezas: PostgreSQL y OpenCode. Antes solo se arrancaba
+    // OpenCode, así que con la base caída el botón parecía no hacer nada.
+    const database = await startDatabase();
+    const current = await upstreamStatus();
+    let upstream = current;
+    let started = database.started;
+    if (!current.ok) {
+      const child = spawn(openCodeBinary(), ["serve", "--service"], {
+        detached: true,
+        stdio: "ignore",
+        env: process.env,
+      });
+      child.on("error", (error) => {
+        console.warn(`No se pudo ejecutar ${openCodeBinary()}: ${error.message}`);
+      });
+      child.unref();
+      started = true;
+      upstream =
+        (await waitForUpstream()) ?? { ok: false, status: 0, timeout: true };
     }
-    return { started: true, ok: false, timeout: true };
+    return {
+      started,
+      ok: upstream.ok && database.ok,
+      status: upstream.status,
+      version: upstream.version,
+      database,
+    };
   })().finally(() => {
     starting = null;
   });
@@ -521,9 +590,11 @@ async function handleRequest(req, res) {
 
   if (url.pathname === "/healthz") {
     const upstream = await upstreamStatus();
+    const database = await databaseReachable();
     const authed = isAuthenticated(req);
-    sendJson(res, upstream.ok ? 200 : 503, {
-      ok: upstream.ok,
+    const ok = upstream.ok && database;
+    sendJson(res, ok ? 200 : 503, {
+      ok,
       ui: "ok",
       auth_required: authRequired,
       upstream: {
@@ -531,6 +602,7 @@ async function handleRequest(req, res) {
         status: upstream.status,
         version: authed ? upstream.version ?? null : null,
       },
+      database: { ok: database, port: factoryDb.port },
       checked_at: new Date().toISOString(),
     });
     return;
@@ -565,7 +637,7 @@ async function handleRequest(req, res) {
         });
         return;
       }
-      const result = await startUpstream();
+      const result = await startFactory();
       sendJson(res, result.ok ? 200 : 503, result);
       return;
     }
@@ -600,10 +672,17 @@ server.listen(port, host, () => {
   console.log(`Factory Console en http://${host}:${port}`);
   console.log(`Proxy OpenCode: ${target.origin}${authorization ? " (auth configurada)" : " (sin auth)"}`);
   console.log(`Auth de consola: ${authRequired ? "activada" : "desactivada (solo loopback)"}`);
-  // Si OpenCode no está levantado, la consola lo arranca al abrirse.
-  startUpstream()
+  // Si la fábrica no está levantada, la consola arranca PostgreSQL y OpenCode al abrirse.
+  startFactory()
     .then((result) => {
-      if (result.started) console.log(result.ok ? "OpenCode arrancado" : "OpenCode no arrancó a tiempo");
+      if (result.started) {
+        console.log(result.ok ? "Fábrica arrancada" : "La fábrica no arrancó a tiempo");
+        if (result.database && !result.database.ok) {
+          console.warn(
+            `PostgreSQL no disponible: ${result.database.error ?? "timeout"}`,
+          );
+        }
+      }
     })
-    .catch((error) => console.warn(`No se pudo comprobar OpenCode: ${error.message}`));
+    .catch((error) => console.warn(`No se pudo comprobar la fábrica: ${error.message}`));
 });
