@@ -37,7 +37,7 @@ reaplicarse si se reinstala el plugin.
 ```bash
 plugins/opencode-memory/node_modules/.bin/tsx -e '
 import { formatMemoryBlock, looksLikeSecret } from "./plugins/opencode-memory/memory.ts";
-console.log(looksLikeSecret("equipo.tailnet.ts.net")); // true
+console.log(looksLikeSecret("mi-host.ejemplo.ts.net")); // true
 console.log(looksLikeSecret("*.ts.net")); // false
 console.log(looksLikeSecret("127.0.0.1")); // false
 '

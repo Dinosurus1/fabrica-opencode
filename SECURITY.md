@@ -114,3 +114,24 @@ skills propias `factory-*`.
 4. Volver a ejecutar `gitleaks git . --redact` y `gitleaks dir . --redact` tras
    cualquier cambio; revisa que los únicos hallazgos sigan siendo los archivos
    no versionados conocidos.
+
+## Restos personales en el historial publicado
+
+Estado a 2026-11-16, rama `factory/update-charter-roles`.
+
+- **Ruta home personal en el historial.** El commit `7929de2` añadió en
+  `ui/src/lib/format.test.ts` una expectativa con una ruta home absoluta de la
+  máquina de desarrollo (`/home/<usuario>/…`). El commit `ef0aadc` la sustituyó
+  por `homedir()`, así que no está en el árbol actual, pero sigue siendo
+  alcanzable en el historial de la rama publicada. Decisión: **no reescribir
+  el historial**; el dato es un nombre de usuario, no una credencial.
+- **Ejemplo de host del tailnet.** `docs/opencode-memory-local-changes.md`
+  usaba un host concreto como ejemplo del filtro de privacidad. Se sustituyó
+  por `mi-host.ejemplo.ts.net`; el valor anterior ya no aparece en el árbol,
+  solo en el historial de `3513624`.
+- No hay credenciales, tokens, `.env` ni cadenas de conexión en el historial
+  publicado: `gitleaks git` sobre `origin/main..origin/factory/update-charter-roles`
+  y sobre el historial completo no encuentra fugas.
+- Criterio para el futuro: cualquier ruta home, correo, host del tailnet o IP
+  privada que se añada a documentación o pruebas debe usar marcadores
+  (`/home/<usuario>`, `mi-host.ejemplo.ts.net`, `192.0.2.10`).
